@@ -7,9 +7,10 @@ from tqdm import tqdm
 
 
 def loss(mdl, dataset, task, device='cpu'):
+    mdl.eval()
     loss = 0.0
     loader = DataLoader(dataset, batch_size=500)
-    for im, la in tqdm(loader, desc='Accuracy', total=len(dataset)//500, leave=False):
+    for im, la in tqdm(loader, desc='Loss', total=len(dataset)//500, leave=False):
         im, la = im.to(device), la.to(device)
         out = mdl(im)
         if task[:3] == 'sup':
@@ -20,6 +21,7 @@ def loss(mdl, dataset, task, device='cpu'):
 
 
 def accuracy(mdl, dataset, task, topk=1, device='cpu'):
+    mdl.eval()
     if task[:5] == 'unsup':
         return torch.tensor(float('nan'))
     acc = 0.0
