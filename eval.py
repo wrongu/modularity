@@ -21,7 +21,7 @@ def loss(mdl, dataset, task, device='cpu'):
 
 def accuracy(mdl, dataset, task, topk=1, device='cpu'):
     if task[:5] == 'unsup':
-        return torch.Tensor(float('nan'))
+        return torch.tensor(float('nan'))
     acc = 0.0
     loader = DataLoader(dataset, batch_size=500)
     for im, la in tqdm(loader, desc='Accuracy', total=len(dataset)//500, leave=False):
