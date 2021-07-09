@@ -34,9 +34,11 @@ class LitWrapper(pl.LightningModule):
         if self.hparams.dataset.lower() == 'mnist' and self.hparams.task.lower()[:3] == 'sup':
             self.model = MnistSupervised(pdrop=self.hparams.drop)
             self.dataset, self.hparams.task = 'mnist', 'sup'
+            self.loss_fn = lambda x, y, out: F.cross_entropy(out, y)
         elif self.hparams.dataset.lower() == 'mnist' and self.hparams.task.lower()[:5] == 'unsup':
             self.model = MnistAutoEncoder(pdrop=self.hparams.drop)
             self.dataset, self.hparams.task = 'mnist', 'unsup'
+            self.loss_fn = lambda x, y, out: F.mse_loss(out, x.view(x.size(0), -1))
         else:
             raise ValueError(f"Unrecognized dataset x task combo: {self.hparams.dataset} x {self.hparams.task}")
 
@@ -50,17 +52,9 @@ class LitWrapper(pl.LightningModule):
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=1e-3)
 
-    def _step(self, batch):
-        x, y = batch
-        _, out = self(x)
-        if self.hparams.task[:3] == 'sup':
-            loss = F.cross_entropy(out, y)
-        else:
-            loss = F.mse_loss(out, x.view(x.size(0), -1))
-        return loss
-
     def training_step(self, batch, batch_idx):
-        loss = self._step(batch)
+        x, y = batch
+        loss = self.loss_fn(x, y, self(x))
         self.log('train_loss', loss)
         return loss + self.hparams.l1 * self.l1_norm() + self.hparams.l2 * self.l2_norm()
 
@@ -69,7 +63,8 @@ class LitWrapper(pl.LightningModule):
         self.log('l2_norm', self.l2_norm())
 
     def validation_step(self, batch, batch_idx):
-        loss = self._step(batch)
+        x, y = batch
+        loss = self.loss_fn(x, y, self(x))
         # TODO - is this accumulating? Would this affect early stopping? Or resuming from checkpoints?
         self.log('val_loss', loss, on_epoch=True)
         return loss
