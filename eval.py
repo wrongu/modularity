@@ -78,7 +78,7 @@ def eval_modularity(checkpoint_file, data_dir, metrics=None):
     for meth in assoc_methods:
         if meth not in assoc_info and (metrics is None or meth in metrics):
             assoc_info[meth] = get_associations(model, meth, data_test)
-            if not is_valid_adjacency_matrix(assoc_info[meth], enforce_sym=True):
+            if not all(is_valid_adjacency_matrix(m, enforce_sym=True) for m in assoc_info[meth]):
                 raise RuntimeError(f"Sanity check on association method {meth} failed!")
     info['assoc'] = assoc_info
 
@@ -86,17 +86,19 @@ def eval_modularity(checkpoint_file, data_dir, metrics=None):
     module_info = info.get('modules', {})
     for meth in assoc_methods:
         if meth not in module_info and (metrics is None or meth in metrics):
-            adj = assoc_info[meth] - assoc_info[meth].diag()
-            if not is_valid_adjacency_matrix(adj, enforce_sym=True, enforce_no_self=True):
-                raise RuntimeError(f"Sanity check on association method {meth} failed!")
-            clusters, mc_scores = monte_carlo_modularity(adj, steps=50000, temperature=1e-4)
-            module_info[meth] = {
-                'adj': adj,
-                'clusters': clusters,
-                'score': girvan_newman(adj, clusters),
-                'mc_scores': mc_scores,
-                'temperature': 1e-4
-            }
+            module_info[meth] = []
+            for adj in assoc_methods[meth]:
+                adj = adj - adj.diag()
+                if not is_valid_adjacency_matrix(adj, enforce_sym=True, enforce_no_self=True):
+                    raise RuntimeError(f"Sanity check on association method {meth} failed!")
+                clusters, mc_scores = monte_carlo_modularity(adj, steps=50000, temperature=1e-4)
+                module_info[meth].append({
+                    'adj': adj,
+                    'clusters': clusters,
+                    'score': girvan_newman(adj, clusters),
+                    'mc_scores': mc_scores,
+                    'temperature': 1e-4
+                })
     info['modules'] = module_info
 
     torch.save(info, checkpoint_file)
