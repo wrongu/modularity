@@ -26,8 +26,9 @@ class LitWrapper(pl.LightningModule):
         # Copy all kwargs fields into instance variables and log them into self.hparams
         self.save_hyperparameters(kwargs)
 
-    def init_model(self):
-        pl.seed_everything(self.hparams.seed)
+    def init_model(self, set_seed=True):
+        if set_seed:
+            pl.seed_everything(self.hparams.seed)
 
         # Select among architectures based on the given dataset, task, etc
         if self.hparams.dataset.lower() == 'mnist' and self.hparams.task.lower()[:3] == 'sup':
@@ -38,6 +39,10 @@ class LitWrapper(pl.LightningModule):
             self.dataset, self.hparams.task = 'mnist', 'unsup'
         else:
             raise ValueError(f"Unrecognized dataset x task combo: {self.hparams.dataset} x {self.hparams.task}")
+
+    def on_load_checkpoint(self, ckpt_file):
+        # Instantiate self.model, but let the calling function handle state_dict stuff
+        self.init_model(set_seed=False)
 
     def forward(self, x):
         return self.model(x)

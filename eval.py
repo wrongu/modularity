@@ -1,8 +1,7 @@
 import torch
 import torch.nn.functional as F
-from models import get_dataset, get_model
+from models import LitWrapper
 from torch.utils.data import DataLoader
-from collections import OrderedDict
 from tqdm import tqdm
 
 
@@ -12,7 +11,7 @@ def loss(mdl, dataset, task, device='cpu'):
     loader = DataLoader(dataset, batch_size=500)
     for im, la in tqdm(loader, desc='Loss', total=len(dataset)//500, leave=False):
         im, la = im.to(device), la.to(device)
-        out = mdl(im)
+        _, out = mdl(im)
         if task[:3] == 'sup':
             loss += F.cross_entropy(out, la, reduction='sum')
         elif task[:5] == 'unsup':
@@ -28,33 +27,40 @@ def accuracy(mdl, dataset, task, topk=1, device='cpu'):
     loader = DataLoader(dataset, batch_size=500)
     for im, la in tqdm(loader, desc='Accuracy', total=len(dataset)//500, leave=False):
         im, la = im.to(device), la.to(device)
-        pred = mdl(im)
+        _, pred = mdl(im)
         ipred = torch.argsort(pred, dim=1, descending=True)[:, :topk]
         acc += torch.sum((ipred == la.view(-1,1)).float())
     return acc.item() / len(dataset)
 
 
-def evaluate(checkpoint_file, metrics=None):
+def evaluate(checkpoint_file, data_dir, metrics=None):
     info = torch.load(checkpoint_file)
-    args = info['hyper_parameters']
-    model = get_model(args['dataset'], args['task'], args['drop'])
-    # Load state dict, but removing any 'model.*' prefix from dictionary keys (thanks, lightning...)
-    model.load_state_dict(OrderedDict((k.split('model.')[-1], v) for k, v in info['state_dict'].items()))
+    model = LitWrapper.load_from_checkpoint(checkpoint_file)
+    data_train, data_val, data_test = model.get_dataset(data_dir)
 
-    data_train, data_val, data_test = get_dataset(args['dataset'], args['data_dir'], args['train_val_split'], args['seed'])
-
+    # Loss and accuracy metrics
     if 'train_loss' not in info and (metrics is None or 'train_loss' in metrics):
-        info['train_loss'] = loss(model, data_train, args['task'])
+        info['train_loss'] = loss(model, data_train, model.hparams.task)
     if 'train_acc' not in info and (metrics is None or 'train_acc' in metrics):
-        info['train_acc'] = accuracy(model, data_train, args['task'])
+        info['train_acc'] = accuracy(model, data_train, model.hparams.task)
     if 'val_loss' not in info and (metrics is None or 'val_loss' in metrics):
-        info['val_loss'] = loss(model, data_val, args['task'])
+        info['val_loss'] = loss(model, data_val, model.hparams.task)
     if 'val_acc' not in info and (metrics is None or 'val_acc' in metrics):
-        info['val_acc'] = accuracy(model, data_val, args['task'])
+        info['val_acc'] = accuracy(model, data_val, model.hparams.task)
     if 'test_loss' not in info and (metrics is None or 'test_loss' in metrics):
-        info['test_loss'] = loss(model, data_test, args['task'])
+        info['test_loss'] = loss(model, data_test, model.hparams.task)
     if 'test_acc' not in info and (metrics is None or 'test_acc' in metrics):
-        info['test_acc'] = accuracy(model, data_test, args['task'])
+        info['test_acc'] = accuracy(model, data_test, model.hparams.task)
+    if 'test_acc' not in info and (metrics is None or 'test_acc' in metrics):
+        info['test_acc'] = accuracy(model, data_test, model.hparams.task)
+
+    # Weight norms, using LitWrapper.l2_norm and LitWrapper.l1_norm
+    if 'l2_norm' not in info and (metrics is None or 'l2_norm' in metrics):
+        info['l2_norm'] = model.l2_norm()
+    if 'l1_norm' not in info and (metrics is None or 'l1_norm' in metrics):
+        info['l1_norm'] = model.l1_norm()
+
+    # TODO - add modularity scores
 
     torch.save(info, checkpoint_file)
     return info
@@ -67,11 +73,12 @@ if __name__ == '__main__':
 
     parser = ArgumentParser()
     parser.add_argument('--ckpt-file', metavar='CKPT', type=Path)
+    parser.add_argument('--data-dir', metavar='DATA', type=Path)
     parser.add_argument('--metrics', default=None)
     args = parser.parse_args()
 
     if args.metrics is not None:
         args.metrics = [s.split() for s in args.metrics.split(",")]
 
-    info = evaluate(args.ckpt_file, args.metrics)
+    info = evaluate(args.ckpt_file, args.data_dir, args.metrics)
     pprint(info)

@@ -70,7 +70,7 @@ if __name__ == '__main__':
 
     # Actually initialize the NN to be trained. Note: this makes use of pl_model.hparams.seed, which by default changes
     # depending on args.run but constant for all other parameters
-    pl_model.init_model()
+    pl_model.init_model(set_seed=True)
 
     trainer = pl.Trainer(logger=tblogger, callbacks=cb, deterministic=True, resume_from_checkpoint=the_checkpoint,
                          default_root_dir=args.save_dir, gpus=the_gpu, auto_select_gpus=False, max_epochs=args.epochs)
