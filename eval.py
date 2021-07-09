@@ -1,6 +1,8 @@
 import torch
 import torch.nn.functional as F
 from models import LitWrapper
+from associations import get_associations
+from modularity import monte_carlo_modularity, girvan_newman
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -60,7 +62,36 @@ def evaluate(checkpoint_file, data_dir, metrics=None):
     if 'l1_norm' not in info and (metrics is None or 'l1_norm' in metrics):
         info['l1_norm'] = model.l1_norm()
 
-    # TODO - add modularity scores
+    torch.save(info, checkpoint_file)
+    return info
+
+
+def eval_modularity(checkpoint_file, data_dir, metrics=None):
+    info = torch.load(checkpoint_file)
+    model = LitWrapper.load_from_checkpoint(checkpoint_file)
+    data_train, data_val, data_test = model.get_dataset(data_dir)
+
+    assoc_methods = ['forward_cov', 'forward_cov_norm', 'backward_cov', 'backward_cov_norm']
+    assoc_info = info.get('assoc', {})
+
+    # Precompute 'association' matrices and store in 'assoc' dictionary of checkpoint data
+    for meth in assoc_methods:
+        if meth not in assoc_info and (metrics is None or meth in metrics):
+            assoc_info[meth] = get_associations(model, meth, data_test)
+    info['assoc'] = assoc_info
+
+    # For each requested method, compute and store (1) cluster assignments and (2) modularity score
+    module_info = info.get('modules', {})
+    for meth in assoc_methods:
+        if meth not in module_info and (metrics is None or meth in metrics):
+            clusters, mc_scores = monte_carlo_modularity(assoc_info[meth], steps=50000, temperature=1e-4)
+            module_info[meth] = {
+                'clusters': clusters,
+                'score': girvan_newman(assoc_info[meth], clusters),
+                'mc_scores': mc_scores,
+                'temperature': 1e-4
+            }
+    info['modules'] = module_info
 
     torch.save(info, checkpoint_file)
     return info
@@ -74,11 +105,14 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--ckpt-file', metavar='CKPT', type=Path)
     parser.add_argument('--data-dir', metavar='DATA', type=Path)
-    parser.add_argument('--metrics', default=None)
+    parser.add_argument('--metrics', default='train_acc,val_acc,test_acc,l1_norm,l2_norm')
+    parser.add_argument('--modularity-metrics', default='')
     args = parser.parse_args()
 
-    if args.metrics is not None:
-        args.metrics = [s.split() for s in args.metrics.split(",")]
+    eval_metrics = [s.split() for s in args.metrics.split(",")] if args.metrics != '' else []
+    mod_metrics = [s.split() for s in args.modularity_metrics.split(",")] if args.modularity_metrics != '' else []
 
-    info = evaluate(args.ckpt_file, args.data_dir, args.metrics)
-    pprint(info)
+    evaluate(args.ckpt_file, args.data_dir, eval_metrics)
+    eval_modularity(args.ckpt_file, args.data_dir, mod_metrics)
+    info = torch.load(args.ckpt_file)
+    pprint({k: info[k] for k in eval_metrics if k in info})
