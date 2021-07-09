@@ -103,6 +103,8 @@ class LitWrapper(pl.LightningModule):
             if val:
                 if isinstance(val, int):
                     uid += f"_{h}={val}"
-                else:
+                elif val >= 0.00001:
                     uid += f"_{h}={val:.5f}"
+                else:
+                    uid += f"_{h}={val:.2e}"
         return uid
