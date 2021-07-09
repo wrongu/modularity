@@ -62,7 +62,7 @@ if __name__ == '__main__':
     # Get dataset split, and construct Trainer and logger. Note: the train/val split is randomized according to pl_model.hparams.seed
     train, val, test = pl_model.get_dataset(args.data_dir)
     cb = [pl.callbacks.ModelCheckpoint(dirpath=weights_dir, monitor='val_loss', save_last=True, save_top_k=5)]
-    tblogger = TensorBoardLogger(args.save_dir, name=pl_model.get_uid(), version=1)
+    tblogger = TensorBoardLogger(args.save_dir, name=pl_model.get_uid(), version=0)
     # Debug - log info to ensure the train/val/test splits are identical for a given run
     tblogger.experiment.add_image('train_0', train[0][0])
     tblogger.experiment.add_image('val_0', val[0][0])
