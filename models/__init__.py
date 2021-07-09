@@ -56,7 +56,8 @@ class LitWrapper(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         x, y = batch
-        loss = self.loss_fn(x, y, self(x))
+        _, out = self(x)
+        loss = self.loss_fn(x, y, out)
         self.log('train_loss', loss)
         return loss + self.hparams.l1 * self.l1_norm() + self.hparams.l2 * self.l2_norm()
 
@@ -66,7 +67,8 @@ class LitWrapper(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
-        loss = self.loss_fn(x, y, self(x))
+        _, out = self(x)
+        loss = self.loss_fn(x, y, out)
         # TODO - is this accumulating? Would this affect early stopping? Or resuming from checkpoints?
         self.log('val_loss', loss, on_epoch=True)
         return loss
