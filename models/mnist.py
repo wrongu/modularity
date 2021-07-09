@@ -29,9 +29,9 @@ class MnistSupervised(nn.Module):
         hidden = []
         h = x.view(x.size(0), -1)
         for i, l in enumerate(self.layers):
-            hidden.append(h)
             h = F.dropout(F.relu(l(h)), p=self.pdrop, training=self.training)
-        return hidden, h
+            hidden.append(h)
+        return hidden[:-1], hidden[-1]
 
 
 class MnistAutoEncoder(nn.Module):

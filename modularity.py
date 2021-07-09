@@ -14,6 +14,18 @@ def is_valid_adjacency_matrix(adj:torch.Tensor, enforce_sym=False, enforce_no_se
     return valid
 
 
+def soft_num_clusters(clusters:torch.Tensor):
+    marginal_frac = clusters.mean(dim=0)
+    plogp = -marginal_frac * torch.log(marginal_frac)
+    # plogp cannot mathematically be less than zero or greater than 1/e; anywhere this happens is a case of floating
+    # point instability, and we just throw it out
+    plogp[torch.isnan(plogp)] = 0.
+    plogp[plogp < 0] = 0.
+    plogp[plogp > 0.3678794412] = 0.
+    entropy = torch.sum(plogp)
+    return torch.exp(entropy)
+
+
 def girvan_newman(adj:torch.Tensor, clusters:torch.Tensor):
     """Compute GN modularity statistic on adjacency matrix A using cluster assignments P.
 

@@ -42,6 +42,8 @@ class LitWrapper(pl.LightningModule):
         else:
             raise ValueError(f"Unrecognized dataset x task combo: {self.hparams.dataset} x {self.hparams.task}")
 
+        self.hidden_dims = self.model.HIDDEN_DIMS
+
     def on_load_checkpoint(self, ckpt_file):
         # Instantiate self.model, but let the calling function handle state_dict stuff
         self.init_model(set_seed=False)

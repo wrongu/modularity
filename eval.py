@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from models import LitWrapper
 from associations import get_associations
-from modularity import monte_carlo_modularity, girvan_newman, is_valid_adjacency_matrix
+from modularity import monte_carlo_modularity, girvan_newman, soft_num_clusters, is_valid_adjacency_matrix
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -87,17 +87,18 @@ def eval_modularity(checkpoint_file, data_dir, metrics=None):
     for meth in assoc_methods:
         if meth not in module_info and (metrics is None or meth in metrics):
             module_info[meth] = []
-            for adj in assoc_methods[meth]:
-                adj = adj - adj.diag()
+            for adj in info['assoc'][meth]:
+                adj = adj - adj.diag().diag()
                 if not is_valid_adjacency_matrix(adj, enforce_sym=True, enforce_no_self=True):
                     raise RuntimeError(f"Sanity check on association method {meth} failed!")
-                clusters, mc_scores = monte_carlo_modularity(adj, steps=50000, temperature=1e-4)
+                clusters, mc_scores = monte_carlo_modularity(adj, steps=100000, temperature=2e-4)
                 module_info[meth].append({
                     'adj': adj,
                     'clusters': clusters,
                     'score': girvan_newman(adj, clusters),
                     'mc_scores': mc_scores,
-                    'temperature': 1e-4
+                    'num_clusters': soft_num_clusters(clusters),
+                    'temperature': 2e-4
                 })
     info['modules'] = module_info
 
@@ -111,14 +112,17 @@ if __name__ == '__main__':
     from argparse import ArgumentParser
 
     parser = ArgumentParser()
-    parser.add_argument('--ckpt-file', metavar='CKPT', type=Path)
-    parser.add_argument('--data-dir', metavar='DATA', type=Path)
+    parser.add_argument('--ckpt-file', metavar='CKPT', type=Path, required=True)
+    parser.add_argument('--data-dir', default=Path('data'), metavar='DATA', type=Path)
     parser.add_argument('--metrics', default='train_acc,val_acc,test_acc,l1_norm,l2_norm')
     parser.add_argument('--modularity-metrics', default='')
     args = parser.parse_args()
 
-    eval_metrics = [s.split() for s in args.metrics.split(",")] if args.metrics != '' else []
-    mod_metrics = [s.split() for s in args.modularity_metrics.split(",")] if args.modularity_metrics != '' else []
+    eval_metrics = args.metrics.split(",") if args.metrics != '' else []
+    mod_metrics = args.modularity_metrics.split(",") if args.modularity_metrics != '' else []
+
+    pprint(eval_metrics)
+    pprint(mod_metrics)
 
     evaluate(args.ckpt_file, args.data_dir, eval_metrics)
     eval_modularity(args.ckpt_file, args.data_dir, mod_metrics)
