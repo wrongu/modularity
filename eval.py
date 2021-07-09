@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from models import LitWrapper
 from associations import get_associations
-from modularity import monte_carlo_modularity, girvan_newman
+from modularity import monte_carlo_modularity, girvan_newman, is_valid_adjacency_matrix
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -78,16 +78,22 @@ def eval_modularity(checkpoint_file, data_dir, metrics=None):
     for meth in assoc_methods:
         if meth not in assoc_info and (metrics is None or meth in metrics):
             assoc_info[meth] = get_associations(model, meth, data_test)
+            if not is_valid_adjacency_matrix(assoc_info[meth], enforce_sym=True):
+                raise RuntimeError(f"Sanity check on association method {meth} failed!")
     info['assoc'] = assoc_info
 
     # For each requested method, compute and store (1) cluster assignments and (2) modularity score
     module_info = info.get('modules', {})
     for meth in assoc_methods:
         if meth not in module_info and (metrics is None or meth in metrics):
-            clusters, mc_scores = monte_carlo_modularity(assoc_info[meth], steps=50000, temperature=1e-4)
+            adj = assoc_info[meth] - assoc_info[meth].diag()
+            if not is_valid_adjacency_matrix(adj, enforce_sym=True, enforce_no_self=True):
+                raise RuntimeError(f"Sanity check on association method {meth} failed!")
+            clusters, mc_scores = monte_carlo_modularity(adj, steps=50000, temperature=1e-4)
             module_info[meth] = {
+                'adj': adj,
                 'clusters': clusters,
-                'score': girvan_newman(assoc_info[meth], clusters),
+                'score': girvan_newman(adj, clusters),
                 'mc_scores': mc_scores,
                 'temperature': 1e-4
             }
