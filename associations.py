@@ -58,7 +58,7 @@ def get_associations(model, method, dataset, device='cpu', batch_size=200, shuff
             hidden, out = model(im)
             loss = model.loss_fn(im, la, out)
             for a, h in zip(assoc, hidden):
-                a += sum_hessian(loss, h)
+                a += sum_hessian(loss, h) / len(dataset)
         # Ensure symmetry, since hessians will not be *exactly* symmetric up to floating point errors, and we will
         # be asserting symmetry later.
         assoc = [(a + a.T)/2. for a in assoc]
