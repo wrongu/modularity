@@ -58,9 +58,9 @@ def evaluate(checkpoint_file, data_dir, metrics=None):
 
     # Weight norms, using LitWrapper.l2_norm and LitWrapper.l1_norm
     if 'l2_norm' not in info and (metrics is None or 'l2_norm' in metrics):
-        info['l2_norm'] = model.l2_norm()
+        info['l2_norm'] = model.l2_norm().detach()
     if 'l1_norm' not in info and (metrics is None or 'l1_norm' in metrics):
-        info['l1_norm'] = model.l1_norm()
+        info['l1_norm'] = model.l1_norm().detach()
 
     torch.save(info, checkpoint_file)
     return info
