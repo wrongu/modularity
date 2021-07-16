@@ -1,6 +1,5 @@
 import torch
 from torch.utils.data import DataLoader
-from hessian import hessian
 from math import ceil
 from tqdm import tqdm
 
@@ -14,9 +13,25 @@ def corrcov(covariance, eps=1e-12):
     return covariance / (sigma.view(-1, 1) * sigma.view(1, -1))
 
 
+def sum_hessian(loss, hidden):
+    """Given scalar tensor 'loss' and [b, d] batch of hidden activations 'hidden', computes [d, d] size sum of hessians
+    for all entries in the batch.
+
+    We make use of the fact that grad^2(f) = grad(grad(f)) and that sum of grads = grad of sum. So, sum(grad^2(f)) is
+    computed as grad(sum(grad(f))).
+    """
+    d = hidden.size(1)
+    grad = torch.autograd.grad(loss, hidden, retain_graph=True, create_graph=True)[0]
+    sum_grad = torch.sum(grad, dim=0)
+    hessian = hidden.new_zeros(d, d)
+    for i in range(d):
+        hessian[i, :] = torch.autograd.grad(sum_grad[i], hidden, retain_graph=True)[0].sum(dim=0)
+    return hessian
+
+
 # TODO - include covariance in feature space (HSIC) for both fwd and bwd methods
 # TODO - include 'online' methods
-def get_associations(model, method, dataset, device='cpu', batch_size=200):
+def get_associations(model, method, dataset, device='cpu', batch_size=200, shuffle=False):
     model.eval()
     model.to(device)
 
@@ -42,9 +57,11 @@ def get_associations(model, method, dataset, device='cpu', batch_size=200):
             im, la = im.to(device), la.to(device)
             hidden, out = model(im)
             loss = model.loss_fn(im, la, out)
-            for hid, hess in zip(hidden, assoc):
-                # For whatever reason, hessian() does not work batch-wise but must be called separately per item
-                hess += sum(hessian(loss, h) for h in hid) / len(dataset)
+            for a, h in zip(assoc, hidden):
+                a += sum_hessian(loss, h)
+        # Ensure symmetry, since hessians will not be *exactly* symmetric up to floating point errors, and we will
+        # be asserting symmetry later.
+        assoc = [(a + a.T)/2. for a in assoc]
     else:
         allowed_methods = ['forward_cov', 'forward_cov_norm', 'backward_hess', 'backward_hess_norm']
         raise ValueError(f"get_association requires method to be one of {allowed_methods}")
