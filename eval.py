@@ -66,7 +66,7 @@ def evaluate(checkpoint_file, data_dir, metrics=None):
     return info
 
 
-def eval_modularity(checkpoint_file, data_dir, metrics=None, device='cpu'):
+def eval_modularity(checkpoint_file, data_dir, temperatures, metrics=None, device='cpu'):
     info = torch.load(checkpoint_file)
     model = LitWrapper.load_from_checkpoint(checkpoint_file)
     _, _, data_test = model.get_dataset(data_dir)
@@ -91,15 +91,20 @@ def eval_modularity(checkpoint_file, data_dir, metrics=None, device='cpu'):
                 adj = adj - adj.diag().diag()
                 if not is_valid_adjacency_matrix(adj, enforce_sym=True, enforce_no_self=True):
                     raise RuntimeError(f"Sanity check on association method {meth} failed!")
-                clusters, mc_scores = monte_carlo_modularity(adj, steps=100000, temperature=2e-4)
+                best_clusters, best_scores, best_temp = None, float('-inf')*torch.ones(()), temperatures[0]
+                for temp in temperatures:
+                    clusters, mc_scores = monte_carlo_modularity(adj, steps=5000, temperature=temp)
+                    if mc_scores.max() > best_scores.max():
+                        best_clusters, best_scores, best_temp = clusters, mc_scores, temp
                 module_info[meth].append({
                     'adj': adj.cpu(),
-                    'clusters': clusters.cpu(),
-                    'score': girvan_newman(adj, clusters).cpu(),
-                    'mc_scores': mc_scores.cpu(),
-                    'num_clusters': soft_num_clusters(clusters).cpu(),
-                    'temperature': 2e-4
+                    'clusters': best_clusters.cpu(),
+                    'score': girvan_newman(adj, best_clusters).cpu(),
+                    'mc_scores': best_scores.cpu(),
+                    'num_clusters': soft_num_clusters(best_clusters).cpu(),
+                    'temperature': best_temp
                 })
+
     info['modules'] = module_info
 
     torch.save(info, checkpoint_file)
@@ -116,16 +121,22 @@ if __name__ == '__main__':
     parser.add_argument('--data-dir', default=Path('data'), metavar='DATA', type=Path)
     parser.add_argument('--device', default='cpu')
     parser.add_argument('--metrics', default='train_acc,val_acc,test_acc,l1_norm,l2_norm')
+    parser.add_argument('--temperatures', default=None)
     parser.add_argument('--modularity-metrics', default='')
     args = parser.parse_args()
 
     eval_metrics = args.metrics.split(",") if args.metrics != '' else []
     mod_metrics = args.modularity_metrics.split(",") if args.modularity_metrics != '' else []
 
+    if args.temperatures is None:
+        args.temperatures = torch.logspace(-4, -2, 7)
+    else:
+        args.temperatures = [float(s.strip()) for s in args.temperatures.split(',')]
+
     pprint(eval_metrics)
     pprint(mod_metrics)
 
     evaluate(args.ckpt_file, args.data_dir, eval_metrics)
-    eval_modularity(args.ckpt_file, args.data_dir, mod_metrics, device=args.device)
+    eval_modularity(args.ckpt_file, args.data_dir, metrics=mod_metrics, device=args.device, temperatures=args.temperatures)
     info = torch.load(args.ckpt_file)
     pprint({k: info[k] for k in eval_metrics if k in info})
