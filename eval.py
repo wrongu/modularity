@@ -66,18 +66,18 @@ def evaluate(checkpoint_file, data_dir, metrics=None):
     return info
 
 
-def eval_modularity(checkpoint_file, data_dir, metrics=None):
+def eval_modularity(checkpoint_file, data_dir, metrics=None, device='cpu'):
     info = torch.load(checkpoint_file)
     model = LitWrapper.load_from_checkpoint(checkpoint_file)
-    data_train, data_val, data_test = model.get_dataset(data_dir)
+    _, _, data_test = model.get_dataset(data_dir)
 
-    assoc_methods = ['forward_cov', 'forward_cov_norm', 'backward_cov', 'backward_cov_norm']
+    assoc_methods = ['forward_cov', 'forward_cov_norm', 'backward_hess', 'backward_hess_norm']
     assoc_info = info.get('assoc', {})
 
     # Precompute 'association' matrices and store in 'assoc' dictionary of checkpoint data
     for meth in assoc_methods:
         if meth not in assoc_info and (metrics is None or meth in metrics):
-            assoc_info[meth] = get_associations(model, meth, data_test)
+            assoc_info[meth] = get_associations(model, meth, data_test, device=device)
             if not all(is_valid_adjacency_matrix(m, enforce_sym=True) for m in assoc_info[meth]):
                 raise RuntimeError(f"Sanity check on association method {meth} failed!")
     info['assoc'] = assoc_info
@@ -93,11 +93,11 @@ def eval_modularity(checkpoint_file, data_dir, metrics=None):
                     raise RuntimeError(f"Sanity check on association method {meth} failed!")
                 clusters, mc_scores = monte_carlo_modularity(adj, steps=100000, temperature=2e-4)
                 module_info[meth].append({
-                    'adj': adj,
-                    'clusters': clusters,
-                    'score': girvan_newman(adj, clusters),
-                    'mc_scores': mc_scores,
-                    'num_clusters': soft_num_clusters(clusters),
+                    'adj': adj.cpu(),
+                    'clusters': clusters.cpu(),
+                    'score': girvan_newman(adj, clusters).cpu(),
+                    'mc_scores': mc_scores.cpu(),
+                    'num_clusters': soft_num_clusters(clusters).cpu(),
                     'temperature': 2e-4
                 })
     info['modules'] = module_info
@@ -114,6 +114,7 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--ckpt-file', metavar='CKPT', type=Path, required=True)
     parser.add_argument('--data-dir', default=Path('data'), metavar='DATA', type=Path)
+    parser.add_argument('--device', default='cpu')
     parser.add_argument('--metrics', default='train_acc,val_acc,test_acc,l1_norm,l2_norm')
     parser.add_argument('--modularity-metrics', default='')
     args = parser.parse_args()
@@ -125,6 +126,6 @@ if __name__ == '__main__':
     pprint(mod_metrics)
 
     evaluate(args.ckpt_file, args.data_dir, eval_metrics)
-    eval_modularity(args.ckpt_file, args.data_dir, mod_metrics)
+    eval_modularity(args.ckpt_file, args.data_dir, mod_metrics, device=args.device)
     info = torch.load(args.ckpt_file)
     pprint({k: info[k] for k in eval_metrics if k in info})
