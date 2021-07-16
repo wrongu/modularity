@@ -3,6 +3,9 @@ from collections import deque
 from tqdm import trange, tqdm
 
 
+ADJACENCY_EPS = 1e-15
+
+
 def is_valid_adjacency_matrix(adj:torch.Tensor, enforce_sym=False, enforce_no_self=False, enforce_binary=False) -> bool:
     valid = torch.all(adj >= 0.)
     if enforce_binary:
@@ -66,11 +69,16 @@ def spectral_modularity(adj, max_clusters=None) -> torch.Tensor:
     """
     n = adj.size(0)
     max_clusters = max_clusters or n
+
+    # Quit early if the adjacency matrix is all zeros (otherwise SVD below will error): return all-zeros for clustering
+    if adj.mean() < ADJACENCY_EPS:
+        return adj.new_zeros(n, max_clusters)
+
     # Normalize by sum of all 'edges' / AKA convert to probability assuming all A>=0
     adj = adj / adj.sum()
     # Compute degree of each 'vertex' / AKA compute marginal probability
     A1 = adj.sum(dim=1, keepdims=True)
-    is_dead = A1.flatten() == 0.
+    is_dead = A1.flatten() < ADJACENCY_EPS
     # Compute modularity matrix 'B': connectivity minus expected random connectivity
     B = adj - A1 * A1.T
 
@@ -79,7 +87,7 @@ def spectral_modularity(adj, max_clusters=None) -> torch.Tensor:
         return torch.sum(B * (clusters @ clusters.T))
 
     # Initialize everything into a single cluster, pruning out 'dead' units right away
-    clusters = torch.zeros(n, max_clusters, device=adj.device)
+    clusters = adj.new_zeros(n, max_clusters)
     clusters[~is_dead, 0] = 1.
     best_score = gn_score(clusters)
     # Iteratively subdivide until modularity score is not improved. This is a greedy method that takes any high-level
@@ -99,12 +107,16 @@ def spectral_modularity(adj, max_clusters=None) -> torch.Tensor:
         Bsub = B[mask, :][:, mask]
         # Compute single top eigenvectors for this sub-matrix
         _, _, v = torch.svd(Bsub)
-        # Propose a split based on the first eigenvector that contains differing signs
-        has_alternating_signs = torch.logical_and(torch.any(v > 0, dim=0), torch.any(v < 0, dim=0))
-        subdiv = v[:, has_alternating_signs][:, 0]
-        # Try new subdivision out: use current 'col' for (+) side of v, and use 'next_avail_col' for (-) side
-        clusters[mask, col] = (subdiv > 0).float()
-        clusters[mask, next_avail_col] = (subdiv < 0).float()
+        # Skip this division if the leading eigenvector does not contain both (+) and (-) elements. Otherwise, propose a
+        # split based on the first eigenvector
+        if torch.all(v[:, 0] >= 0.) or torch.all(v[:, 0] <= 0.):
+            continue
+        # Try new subdivision out: use current 'col' for (+) side of v, and use 'next_avail_col' for (-) side. In rare
+        # cases, v will have exact zeros on nodes that are not 'dead' according to the EPS check above. The cluster
+        # assignments for such nodes does not affect the score anyway (|v| is what matters), so we use >= in the (+)
+        # cluster to include the zeros there arbitrarily.
+        clusters[mask, col] = (v[:, 0] >= 0).float()
+        clusters[mask, next_avail_col] = (v[:, 0] < 0).float()
         subdiv_score = gn_score(clusters)
         # If improved, keep it and push potential further subdivisions onto the queue
         if subdiv_score > best_score:
@@ -128,14 +140,19 @@ def monte_carlo_modularity(adj, clusters=None, max_clusters=None, steps=10000, t
     """
     if clusters is None:
         clusters = spectral_modularity(adj, max_clusters=max_clusters)
+
     max_clusters = clusters.size(1)
     best_score, best_clusters = girvan_newman_sym(adj, clusters).cpu(), clusters.clone()
     scores_history = torch.zeros(steps)
-    # Some elements are disconnected – don't bother moving these around
-    is_dead = adj.sum(dim=1) == 0.
-    # Pick a random item to shuffle around
+    # Some elements are initially not clustered ("dead") – don't bother moving these around
+    is_dead = clusters.sum(dim=1) == 0.
+    # Quit early if there are no units to move around
+    if torch.all(is_dead):
+        return clusters, torch.zeros(1)
+
+    # Pick a random item to shuffle around in each step
     ishuffle = torch.multinomial((~is_dead).float(), num_samples=steps, replacement=True)
-    for i, idx in tqdm(enumerate(ishuffle), desc='MC shuffles', leave=False, total=steps):
+    for i, idx in tqdm(enumerate(ishuffle), desc=f'MC shuffles [T={temperature:.2e}]', leave=False, total=steps):
         # Consider all possible re-assignments, but only consider creating a new column at most 1 time
         scores, did_new_col = float('-inf')*torch.ones(max_clusters), False
         for j in range(max_clusters):
