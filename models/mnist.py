@@ -28,8 +28,8 @@ class MnistSupervised(nn.Module):
     def forward(self, x):
         hidden = []
         h = x.view(x.size(0), -1)
-        for i, l in enumerate(self.layers):
-            h = F.dropout(F.relu(l(h)), p=self.pdrop, training=self.training)
+        for lay in self.layers:
+            h = F.dropout(F.relu(lay(h)), p=self.pdrop, training=self.training)
             hidden.append(h)
         return hidden[:-1], hidden[-1]
 
@@ -60,9 +60,9 @@ class MnistAutoEncoder(nn.Module):
 
     def forward(self, x):
         h = x.view(x.size(0), -1)
-        for i, l in enumerate(self.enc_layers):
-            h = F.dropout(F.relu(l(h)), p=self.pdrop, training=self.training)
+        for lay in self.enc_layers:
+            h = F.dropout(F.relu(lay(h)), p=self.pdrop, training=self.training)
         hidden = [h]
-        for i, l in enumerate(self.dec_layers):
-            h = F.dropout(F.relu(l(h)), p=self.pdrop, training=self.training)
+        for lay in self.dec_layers:
+            h = F.dropout(F.relu(lay(h)), p=self.pdrop, training=self.training)
         return hidden, h
