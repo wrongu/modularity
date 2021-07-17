@@ -4,6 +4,7 @@ from models import LitWrapper
 from associations import get_associations
 from modularity import monte_carlo_modularity, girvan_newman, soft_num_clusters, is_valid_adjacency_matrix
 from torch.utils.data import DataLoader
+from warnings import warn
 from tqdm import tqdm
 
 
@@ -79,7 +80,8 @@ def eval_modularity(checkpoint_file, data_dir, temperatures, metrics=None, devic
         if meth not in assoc_info and (metrics is None or meth in metrics):
             assoc_info[meth] = get_associations(model, meth, data_test, device=device)
             if not all(is_valid_adjacency_matrix(m, enforce_sym=True) for m in assoc_info[meth]):
-                raise RuntimeError(f"Sanity check on association method {meth} failed!")
+                warn(f"First sanity check on association method {meth} failed!")
+                metrics.remove(meth)
     info['assoc'] = assoc_info
 
     # For each requested method, compute and store (1) cluster assignments and (2) modularity score
@@ -90,12 +92,23 @@ def eval_modularity(checkpoint_file, data_dir, temperatures, metrics=None, devic
             for adj in info['assoc'][meth]:
                 adj = adj - adj.diag().diag()
                 if not is_valid_adjacency_matrix(adj, enforce_sym=True, enforce_no_self=True):
-                    raise RuntimeError(f"Sanity check on association method {meth} failed!")
+                    warn(f"Second sanity check on association method {meth} failed!")
+                    module_info[meth].append({
+                        'adj': adj.cpu(),
+                        'clusters': float('nan')*torch.ones(adj.size()),
+                        'score': float('nan'),
+                        'mc_scores': float('nan')*torch.ones(5000),
+                        'num_clusters': float('nan'),
+                        'temperature': float('nan')
+                    })
+                    continue
+
                 best_clusters, best_scores, best_temp = None, float('-inf')*torch.ones(()), temperatures[0]
                 for temp in temperatures:
                     clusters, mc_scores = monte_carlo_modularity(adj, steps=5000, temperature=temp)
                     if mc_scores.max() > best_scores.max():
                         best_clusters, best_scores, best_temp = clusters, mc_scores, temp
+
                 module_info[meth].append({
                     'adj': adj.cpu(),
                     'clusters': best_clusters.cpu(),
