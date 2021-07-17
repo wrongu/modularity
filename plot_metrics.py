@@ -61,18 +61,75 @@ def nanstats(data):
 base_config = {'dataset': 'mnist', 'task': 'sup', 'l1': 0.0, 'l2': 1e-5, 'drop': 0.0, 'runs': 9, 'x_scale': 'linear',
                'figsize': (3, 1.5), 'eval': False}
 
+# configs = [
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'train_acc', 'y_lim': [0.05, 1.0]},
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'val_acc', 'y_lim': [0.05, 1.0]},
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'test_acc', 'y_lim': [0.05, 1.0]},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'train_acc', 'y_lim': [0.05, 1.0]},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'val_acc', 'y_lim': [0.05, 1.0]},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'test_acc', 'y_lim': [0.05, 1.0]},
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'l1_norm'},
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'l2_norm'},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'l1_norm'},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'l2_norm'},
+# ]
+
 configs = [
-    {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'train_acc', 'y_lim': [0.05, 1.0]},
-    {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'val_acc', 'y_lim': [0.05, 1.0]},
-    {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'test_acc', 'y_lim': [0.05, 1.0]},
-    {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'train_acc', 'y_lim': [0.05, 1.0]},
-    {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'val_acc', 'y_lim': [0.05, 1.0]},
-    {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'test_acc', 'y_lim': [0.05, 1.0]},
-    {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'l1_norm'},
-    {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'l2_norm'},
-    {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'l1_norm'},
-    {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'l2_norm'}
+    {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.forward_cov.0.score', 'y_lim': [0.05, 0.25]},
+    {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.forward_cov.0.score', 'y_lim': [0.05, 0.25]},
+    {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.forward_cov_norm.0.score', 'y_lim': [0.05, 0.25]},
+    {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.forward_cov_norm.0.score', 'y_lim': [0.05, 0.25]},
+    {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.backward_hess.0.score', 'y_lim': [0.05, 0.25]},
+    {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.backward_hess.0.score', 'y_lim': [0.05, 0.25]},
+    {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.backward_hess_norm.0.score', 'y_lim': [0.05, 0.25]},
+    {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.backward_hess_norm.0.score', 'y_lim': [0.05, 0.25]},
+    {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.forward_cov.1.score', 'y_lim': [0.05, 0.25]},
+    {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.forward_cov.1.score', 'y_lim': [0.05, 0.25]},
+    {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.forward_cov_norm.1.score', 'y_lim': [0.05, 0.25]},
+    {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.forward_cov_norm.1.score', 'y_lim': [0.05, 0.25]},
+    {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.backward_hess.1.score', 'y_lim': [0.05, 0.25]},
+    {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.backward_hess.1.score', 'y_lim': [0.05, 0.25]},
+    {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.backward_hess_norm.1.score', 'y_lim': [0.05, 0.25]},
+    {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.backward_hess_norm.1.score', 'y_lim': [0.05, 0.25]}
 ]
+
+# configs = [
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.forward_cov.0.num_clusters', 'y_lim': [0, 20]},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.forward_cov.0.num_clusters', 'y_lim': [0, 20]},
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.forward_cov_norm.0.num_clusters', 'y_lim': [0, 20]},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.forward_cov_norm.0.num_clusters', 'y_lim': [0, 20]},
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.backward_hess.0.num_clusters', 'y_lim': [0, 20]},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.backward_hess.0.num_clusters', 'y_lim': [0, 20]},
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.backward_hess_norm.0.num_clusters', 'y_lim': [0, 20]},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.backward_hess_norm.0.num_clusters', 'y_lim': [0, 20]},
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.forward_cov.1.num_clusters', 'y_lim': [0, 20]},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.forward_cov.1.num_clusters', 'y_lim': [0, 20]},
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.forward_cov_norm.1.num_clusters', 'y_lim': [0, 20]},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.forward_cov_norm.1.num_clusters', 'y_lim': [0, 20]},
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.backward_hess.1.num_clusters', 'y_lim': [0, 20]},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.backward_hess.1.num_clusters', 'y_lim': [0, 20]},
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.backward_hess_norm.1.num_clusters', 'y_lim': [0, 20]},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.backward_hess_norm.1.num_clusters', 'y_lim': [0, 20]},
+# ]
+
+# configs = [
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.forward_cov.0.temperature', 'y_lim': [1e-4, 1e-2], 'y_scale': 'log'},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.forward_cov.0.temperature', 'y_lim': [1e-4, 1e-2], 'y_scale': 'log'},
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.forward_cov_norm.0.temperature', 'y_lim': [1e-4, 1e-2], 'y_scale': 'log'},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.forward_cov_norm.0.temperature', 'y_lim': [1e-4, 1e-2], 'y_scale': 'log'},
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.backward_hess.0.temperature', 'y_lim': [1e-4, 1e-2], 'y_scale': 'log'},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.backward_hess.0.temperature', 'y_lim': [1e-4, 1e-2], 'y_scale': 'log'},
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.backward_hess_norm.0.temperature', 'y_lim': [1e-4, 1e-2], 'y_scale': 'log'},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.backward_hess_norm.0.temperature', 'y_lim': [1e-4, 1e-2], 'y_scale': 'log'},
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.forward_cov.1.temperature', 'y_lim': [1e-4, 1e-2], 'y_scale': 'log'},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.forward_cov.1.temperature', 'y_lim': [1e-4, 1e-2], 'y_scale': 'log'},
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.forward_cov_norm.1.temperature', 'y_lim': [1e-4, 1e-2], 'y_scale': 'log'},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.forward_cov_norm.1.temperature', 'y_lim': [1e-4, 1e-2], 'y_scale': 'log'},
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.backward_hess.1.temperature', 'y_lim': [1e-4, 1e-2], 'y_scale': 'log'},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.backward_hess.1.temperature', 'y_lim': [1e-4, 1e-2], 'y_scale': 'log'},
+#     {'l2': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l2', 'y': 'modules.backward_hess_norm.1.temperature', 'y_lim': [1e-4, 1e-2], 'y_scale': 'log'},
+#     {'l1': torch.logspace(-5, -1, 9), 'x_scale': 'log', 'x': 'l1', 'y': 'modules.backward_hess_norm.1.temperature', 'y_lim': [1e-4, 1e-2], 'y_scale': 'log'},
+# ]
 
 configs = [dict(chain(base_config.items(), c.items())) for c in configs]
 
