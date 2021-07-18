@@ -2,7 +2,8 @@ import torch
 import torch.nn.functional as F
 from models import LitWrapper
 from associations import get_associations
-from modularity import monte_carlo_modularity, girvan_newman, soft_num_clusters, is_valid_adjacency_matrix
+from modularity import monte_carlo_modularity, girvan_newman, soft_num_clusters, is_valid_adjacency_matrix, \
+    alignment_score, shuffled_alignment_score
 from torch.utils.data import DataLoader
 from warnings import warn
 from tqdm import tqdm
@@ -41,26 +42,29 @@ def evaluate(checkpoint_file, data_dir, metrics=None):
     model = LitWrapper.load_from_checkpoint(checkpoint_file)
     data_train, data_val, data_test = model.get_dataset(data_dir)
 
+    if metrics is None:
+        metrics = ['train_loss', 'train_acc', 'val_loss', 'val_acc', 'test_loss', 'test_acc', 'l1_norm', 'l2_norm']
+
     # Loss and accuracy metrics
-    if 'train_loss' not in info and (metrics is None or 'train_loss' in metrics):
+    if 'train_loss' not in info and 'train_loss' in metrics:
         info['train_loss'] = loss(model, data_train, model.hparams.task)
-    if 'train_acc' not in info and (metrics is None or 'train_acc' in metrics):
+    if 'train_acc' not in info and 'train_acc' in metrics:
         info['train_acc'] = accuracy(model, data_train, model.hparams.task)
-    if 'val_loss' not in info and (metrics is None or 'val_loss' in metrics):
+    if 'val_loss' not in info and 'val_loss' in metrics:
         info['val_loss'] = loss(model, data_val, model.hparams.task)
-    if 'val_acc' not in info and (metrics is None or 'val_acc' in metrics):
+    if 'val_acc' not in info and 'val_acc' in metrics:
         info['val_acc'] = accuracy(model, data_val, model.hparams.task)
-    if 'test_loss' not in info and (metrics is None or 'test_loss' in metrics):
+    if 'test_loss' not in info and 'test_loss' in metrics:
         info['test_loss'] = loss(model, data_test, model.hparams.task)
-    if 'test_acc' not in info and (metrics is None or 'test_acc' in metrics):
+    if 'test_acc' not in info and 'test_acc' in metrics:
         info['test_acc'] = accuracy(model, data_test, model.hparams.task)
-    if 'test_acc' not in info and (metrics is None or 'test_acc' in metrics):
+    if 'test_acc' not in info and 'test_acc' in metrics:
         info['test_acc'] = accuracy(model, data_test, model.hparams.task)
 
     # Weight norms, using LitWrapper.l2_norm and LitWrapper.l1_norm
-    if 'l2_norm' not in info and (metrics is None or 'l2_norm' in metrics):
+    if 'l2_norm' not in info and 'l2_norm' in metrics:
         info['l2_norm'] = model.l2_norm().detach()
-    if 'l1_norm' not in info and (metrics is None or 'l1_norm' in metrics):
+    if 'l1_norm' not in info and 'l1_norm' in metrics:
         info['l1_norm'] = model.l1_norm().detach()
 
     torch.save(info, checkpoint_file)
@@ -72,12 +76,13 @@ def eval_modularity(checkpoint_file, data_dir, temperatures, metrics=None, devic
     model = LitWrapper.load_from_checkpoint(checkpoint_file)
     _, _, data_test = model.get_dataset(data_dir)
 
-    assoc_methods = ['forward_cov', 'forward_cov_norm', 'backward_hess', 'backward_hess_norm']
+    if metrics is None:
+        metrics = ['forward_cov', 'forward_cov_norm', 'backward_hess', 'backward_hess_norm']
     assoc_info = info.get('assoc', {})
 
     # Precompute 'association' matrices and store in 'assoc' dictionary of checkpoint data
-    for meth in assoc_methods:
-        if meth not in assoc_info and (metrics is None or meth in metrics):
+    for meth in metrics:
+        if meth not in assoc_info:
             assoc_info[meth] = get_associations(model, meth, data_test, device=device)
             if not all(is_valid_adjacency_matrix(m, enforce_sym=True) for m in assoc_info[meth]):
                 warn(f"First sanity check on association method {meth} failed!")
@@ -86,8 +91,8 @@ def eval_modularity(checkpoint_file, data_dir, temperatures, metrics=None, devic
 
     # For each requested method, compute and store (1) cluster assignments and (2) modularity score
     module_info = info.get('modules', {})
-    for meth in assoc_methods:
-        if meth not in module_info and (metrics is None or meth in metrics):
+    for meth in metrics:
+        if meth not in module_info or module_info[meth] == []:
             module_info[meth] = []
             for adj in info['assoc'][meth]:
                 adj = adj - adj.diag().diag()
@@ -117,8 +122,21 @@ def eval_modularity(checkpoint_file, data_dir, temperatures, metrics=None, devic
                     'num_clusters': soft_num_clusters(best_clusters).cpu(),
                     'temperature': best_temp
                 })
-
     info['modules'] = module_info
+
+    # Compute module alignments
+    alignment_info = info.get('align', {})
+    for i, meth1 in enumerate(metrics):
+        for meth2 in metrics[i:]:
+            key1, key2 = meth1 + ":" + meth2, meth2 + ":" + meth1
+            print(key1)
+            for info1, info2 in zip(info['modules'][meth1], info['modules'][meth2]):
+                alignment_info[key1] = {
+                    'score': alignment_score(info1['clusters'], info2['clusters']),
+                    'null': shuffled_alignment_score(info1['clusters'], info2['clusters'])
+                }
+                alignment_info[key2] = alignment_info[key1]
+    info['align'] = alignment_info
 
     torch.save(info, checkpoint_file)
     return info

@@ -148,7 +148,7 @@ def monte_carlo_modularity(adj, clusters=None, max_clusters=None, steps=10000, t
     is_dead = clusters.sum(dim=1) == 0.
     # Quit early if there are no units to move around
     if torch.all(is_dead):
-        return clusters, torch.zeros(1)
+        return clusters, torch.tensor(float('nan'))
 
     # Pick a random item to shuffle around in each step
     ishuffle = torch.multinomial((~is_dead).float(), num_samples=steps, replacement=True)
@@ -205,3 +205,29 @@ def gradient_ascent_modularity(adj, max_k=None, steps=5000, num_init=100):
             scores[s] = gn.item()
 
     return torch.softmax(log_clusters.detach(), dim=1).cpu(), scores
+
+
+def greedy_alignment(cluster1, cluster2):
+    c1c2 = cluster1.T @ cluster2
+    n = c1c2.size()[0]
+    # Greedily pick out max (r, c) indices of the c1c2 product, then remove row r and column c
+    row_sort, col_sort = list(range(n)), list(range(n))
+    for i in range(n):
+        # Find 1D index of the max element of c1c2 alignments
+        best = torch.argmax(c1c2).item()
+        # Convert to 2D row, col indices and save 'sort' array in descending order of maxima
+        row_sort[i], col_sort[i] = best // n, best % n
+        # Overwrite this row, col pair with '-inf' so next iteration gets the next-highest value
+        c1c2[row_sort[i], :], c1c2[:, col_sort[i]] = float('-inf'), float('-inf')
+    return row_sort, col_sort
+
+
+def alignment_score(cluster1, cluster2):
+    n = cluster1.size()[0]
+    row_sort, col_sort = greedy_alignment(cluster1, cluster2)
+    return torch.sum(cluster1[:, row_sort] * cluster2[:, col_sort]) / n
+
+
+def shuffled_alignment_score(cluster1, cluster2, n_shuffle=10000):
+    n = cluster1.size()[0]
+    return torch.tensor([alignment_score(cluster1[torch.randperm(n), :], cluster2) for _ in trange(n_shuffle, leave=False)])
