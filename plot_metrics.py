@@ -4,7 +4,6 @@ from eval import evaluate, eval_modularity
 from pathlib import Path
 from models import LitWrapper
 import matplotlib.pyplot as plt
-from math import sqrt
 from itertools import chain
 
 
@@ -53,7 +52,7 @@ def nanstats(data):
     mean = torch.nansum(data, dim=-1) / count
     std = torch.zeros(mean.size())
     for i in range(len(std)):
-        std[i] = torch.sqrt(torch.sum((data[valid[:, i], i] - mean[i])**2) / (count[i] - 1))
+        std[i] = torch.sqrt(torch.sum((data[i, valid[i, :]] - mean[i])**2) / (count[i] - 1))
     sem = std / torch.sqrt(count)
     return mean, std, sem
 
