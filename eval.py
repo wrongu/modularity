@@ -71,16 +71,19 @@ def evaluate(checkpoint_file, data_dir, metrics=None):
     return info
 
 
-def eval_modularity(checkpoint_file, data_dir, temperatures, metrics=None, device='cpu'):
+def eval_modularity(checkpoint_file, data_dir, temperatures=None, metrics=None, device='cpu'):
     info = torch.load(checkpoint_file)
     model = LitWrapper.load_from_checkpoint(checkpoint_file)
     _, _, data_test = model.get_dataset(data_dir)
 
+    if temperatures is None:
+        temperatures = torch.logspace(-4, -2, 7)
+
     if metrics is None:
         metrics = ['forward_cov', 'forward_cov_norm', 'backward_hess', 'backward_hess_norm']
-    assoc_info = info.get('assoc', {})
 
     # Precompute 'association' matrices and store in 'assoc' dictionary of checkpoint data
+    assoc_info = info.get('assoc', {})
     for meth in metrics:
         if meth not in assoc_info:
             assoc_info[meth] = get_associations(model, meth, data_test, device=device)
@@ -159,9 +162,7 @@ if __name__ == '__main__':
     eval_metrics = args.metrics.split(",") if args.metrics != '' else []
     mod_metrics = args.modularity_metrics.split(",") if args.modularity_metrics != '' else []
 
-    if args.temperatures is None:
-        args.temperatures = torch.logspace(-4, -2, 7)
-    else:
+    if args.temperatures is not None:
         args.temperatures = [float(s.strip()) for s in args.temperatures.split(',')]
 
     pprint(eval_metrics)

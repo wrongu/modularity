@@ -7,7 +7,7 @@ ADJACENCY_EPS = 1e-15
 
 
 def is_valid_adjacency_matrix(adj:torch.Tensor, enforce_sym=False, enforce_no_self=False, enforce_binary=False) -> bool:
-    valid = torch.all(adj >= 0.)
+    valid = torch.all(adj >= 0.) and torch.mean(adj) > ADJACENCY_EPS
     if enforce_binary:
         valid = valid and torch.all(torch.logical_or(adj == 0., adj == 1.))
     if enforce_no_self:
