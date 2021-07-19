@@ -68,8 +68,7 @@ def generate_model_specs(base_specs):
     for spec in base_specs:
         iterable_fields = {k: v for k, v in spec.items() if (hasattr(v, '__iter__') and not isinstance(v, str))}
         for vv in product(*iterable_fields.values()):
-            spec.update(dict(zip(iterable_fields.keys(), vv)))
-            yield spec
+            yield merge_dicts(spec, dict(zip(iterable_fields.keys(), vv)))
 
 
 def get_model_checkpoint(spec, log_dir=Path('logs/')):
@@ -83,7 +82,7 @@ def get_model_checkpoint(spec, log_dir=Path('logs/')):
         raise ValueError(f"spec['checkpoint'] must be 'last' or 'best' but as '{which_checkpoint}'")
 
 
-def load_data_as_table(model_specs, metrics, log_dir=Path('logs/'), data_dir=Path('data/'), compute=False):
+def load_data_as_table(model_specs, metrics, log_dir=Path('logs/')):
     tbl = DataFrame()
     for spec in model_specs:
         new_rows = gather_metrics(get_model_checkpoint(spec, log_dir), metrics)
