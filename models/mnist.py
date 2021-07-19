@@ -1,6 +1,5 @@
 import torch.nn as nn
 import torch.nn.functional as F
-from util import is_iterable
 
 
 # Some global MNIST metadata

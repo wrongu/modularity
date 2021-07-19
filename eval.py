@@ -131,14 +131,15 @@ def eval_modularity(checkpoint_file, data_dir, temperatures=None, metrics=None, 
     alignment_info = info.get('align', {})
     for i, meth1 in enumerate(metrics):
         for meth2 in metrics[i:]:
-            key1, key2 = meth1 + ":" + meth2, meth2 + ":" + meth1
-            print(key1)
-            for info1, info2 in zip(info['modules'][meth1], info['modules'][meth2]):
-                alignment_info[key1] = {
+            # Sort methods so key is always in alphabetical order <method a>:<method b>
+            meth_a, meth_b = min([meth1, meth2]), max([meth1, meth2])
+            key = meth_a + ":" + meth_b
+            alignment_info[key] = []
+            for info1, info2 in zip(info['modules'][meth_a], info['modules'][meth_b]):
+                alignment_info[key].append({
                     'score': alignment_score(info1['clusters'], info2['clusters']),
-                    'null': shuffled_alignment_score(info1['clusters'], info2['clusters'])
-                }
-                alignment_info[key2] = alignment_info[key1]
+                    'null': shuffled_alignment_score(info1['clusters'], info2['clusters'], n_shuffle=2000)
+                })
     info['align'] = alignment_info
 
     torch.save(info, checkpoint_file)
