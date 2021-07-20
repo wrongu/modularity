@@ -1,5 +1,3 @@
-import itertools
-
 import torch
 from pathlib import Path
 from models import LitWrapper
