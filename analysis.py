@@ -34,7 +34,9 @@ def gather_metrics(ckpt_file, metrics):
             _key = f"{assoc}_{layer}"
             try:
                 _data = {"assoc": assoc, "layer": layer, field: info["modules"][assoc][layer][field]}
-            except [KeyError, IndexError]:
+            except Exception as e:
+                if not (isinstance(e, KeyError) or isinstance(e, IndexError)):
+                    raise e
                 _data = {"assoc": assoc, "layer": layer, field: float('nan')}
         elif parts[0] == "align":
             # Parse metric of the form "aslign.<assoc_method_1>:<assoc_method_2>.<layer_number>.<field>". Create a new
@@ -45,7 +47,9 @@ def gather_metrics(ckpt_file, metrics):
             try:
                 _data = {"assoc_a": assoc_a, "assoc_b": assoc_b, "layer": layer,
                          field: info["align"][assoc_a + ":" + assoc_b][layer][field]}
-            except [KeyError, IndexError]:
+            except Exception as e:
+                if not (isinstance(e, KeyError) or isinstance(e, IndexError)):
+                    raise e
                 _data = {"assoc_a": assoc_a, "assoc_b": assoc_b, "layer": layer, field: float('nan')}
         else:
             # No parsing in default case. Just get values and add to existing row.
@@ -54,6 +58,9 @@ def gather_metrics(ckpt_file, metrics):
                 _data = {metric: info[metric]}
             except KeyError:
                 _data = {metric: float('nan')}
+
+        # Convert out of torch to play more nicely with pandas
+        _data = {k: (v.item() if torch.is_tensor(v) else v) for k, v in _data.items()}
 
         # Insert or update data stored at keyed_rows[_key]
         keyed_rows[_key] = merge_dicts(keyed_rows.get(_key, {}), _data)
