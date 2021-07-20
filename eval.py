@@ -138,7 +138,8 @@ def eval_modularity(checkpoint_file, data_dir, temperatures=None, metrics=None, 
             for info1, info2 in zip(info['modules'][meth_a], info['modules'][meth_b]):
                 alignment_info[key].append({
                     'score': alignment_score(info1['clusters'], info2['clusters']),
-                    'null': shuffled_alignment_score(info1['clusters'], info2['clusters'], n_shuffle=2000)
+                    'null': shuffled_alignment_score(info1['clusters'], info2['clusters'], n_shuffle=2000),
+                    'version': 1
                 })
     info['align'] = alignment_info
 

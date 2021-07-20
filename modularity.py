@@ -223,9 +223,9 @@ def greedy_alignment(cluster1, cluster2):
 
 
 def alignment_score(cluster1, cluster2):
-    n = cluster1.size()[0]
+    n1, n2 = cluster1.sum(), cluster2.sum()
     row_sort, col_sort = greedy_alignment(cluster1, cluster2)
-    return torch.sum(cluster1[:, row_sort] * cluster2[:, col_sort]) / n
+    return torch.sum(cluster1[:, row_sort] * cluster2[:, col_sort]) / min(n1, n2)
 
 
 def shuffled_alignment_score(cluster1, cluster2, n_shuffle=10000):
