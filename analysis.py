@@ -51,7 +51,7 @@ def gather_metrics(ckpt_file, metrics):
                 _data = {"assoc_a": assoc_a, "assoc_b": assoc_b, "layer": layer, field: float('nan')}
         else:
             # No parsing in default case. Just get values and add to existing row.
-            _key = "."
+            _key = "basic"
             try:
                 _data = {metric: info[metric]}
             except KeyError:
@@ -62,6 +62,12 @@ def gather_metrics(ckpt_file, metrics):
 
         # Insert or update data stored at keyed_rows[_key]
         keyed_rows[_key] = merge_dicts(keyed_rows.get(_key, {}), _data)
+
+    if "basic" in keyed_rows and len(keyed_rows) > 1:
+        # Requested some 'basic' stats as well as either 'modules' or 'align'; copy basic info to all other rows
+        basic_metrics = keyed_rows.pop("basic")
+        for k, v in keyed_rows.items():
+            v.update(basic_metrics)
 
     return keyed_rows.values()
 
@@ -93,3 +99,9 @@ def load_data_as_table(model_specs, metrics, log_dir=Path('logs/')):
         new_rows = gather_metrics(get_model_checkpoint(spec, log_dir), metrics)
         tbl = tbl.append(DataFrame([merge_dicts(spec, r) for r in new_rows]))
     return tbl
+
+
+if __name__ == "__main__":
+    # simple test..
+    spec = {'dataset': 'mnist', 'task': 'sup', 'drop': 0., 'l1': 1e-4, 'l2': 1e-5, 'run': 6}
+    df = load_data_as_table([spec], ['modules.forward_cov.0.score', 'modules.forward_cov.1.score', 'test_acc'])
