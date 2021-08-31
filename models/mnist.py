@@ -25,12 +25,10 @@ class MnistSupervised(nn.Module):
         self.layers = [self.fc1, self.fc2, self.fc3]
 
     def forward(self, x):
-        hidden = []
-        h = x.view(x.size(0), -1)
-        for lay in self.layers:
-            h = F.dropout(F.relu(lay(h)), p=self.pdrop, training=self.training)
-            hidden.append(h)
-        return hidden[:-1], hidden[-1]
+        x = x.view(x.size(0), -1)
+        h0 = F.dropout(F.relu(self.fc1(x)), p=self.pdrop, training=self.training)
+        h1 = F.dropout(F.relu(self.fc2(h0)), p=self.pdrop, training=self.training)
+        return [h0, h1], self.fc3(h1)
 
 
 class MnistAutoEncoder(nn.Module):
@@ -58,10 +56,13 @@ class MnistAutoEncoder(nn.Module):
         self.dec_layers = [self.fc4, self.fc5, self.fc6]
 
     def forward(self, x):
-        h = x.view(x.size(0), -1)
-        for lay in self.enc_layers:
-            h = F.dropout(F.relu(lay(h)), p=self.pdrop, training=self.training)
-        hidden = [h]
-        for lay in self.dec_layers:
-            h = F.dropout(F.relu(lay(h)), p=self.pdrop, training=self.training)
-        return hidden, h
+        x = x.view(x.size(0), -1)
+        # Encoder stage
+        e0 = F.dropout(F.relu(self.fc1(x)), p=self.pdrop, training=self.training)
+        e1 = F.dropout(F.relu(self.fc2(e0)), p=self.pdrop, training=self.training)
+        # Bottleneck stage -- no relu or dropout
+        h = self.fc3(e1)
+        # Decoder stage
+        d0 = F.dropout(F.relu(self.fc4(h)), p=self.pdrop, training=self.training)
+        d1 = F.dropout(F.relu(self.fc5(d0)), p=self.pdrop, training=self.training)
+        return [h], self.fc6(d1)
