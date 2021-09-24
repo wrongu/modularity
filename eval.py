@@ -80,7 +80,8 @@ def eval_modularity(checkpoint_file, data_dir, temperatures=None, metrics=None, 
         temperatures = torch.logspace(-4, -2, 7)
 
     if metrics is None:
-        metrics = ['forward_cov', 'forward_cov_norm', 'backward_hess', 'backward_hess_norm']
+        metrics = ['forward_cov', 'forward_cov_norm', 'backward_hess', 'backward_hess_norm',
+                   'forward_jac', 'forward_jac_norm', 'backward_jac', 'backward_jac_norm']
 
     # Precompute 'association' matrices and store in 'assoc' dictionary of checkpoint data
     assoc_info = info.get('assoc', {})

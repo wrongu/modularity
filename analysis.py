@@ -19,7 +19,7 @@ def best_model(model_dir):
 
 
 def gather_metrics(ckpt_file, metrics):
-    info = torch.load(ckpt_file)
+    info = torch.load(ckpt_file, map_location='cpu')
     keyed_rows = {}
 
     for metric in metrics:
@@ -58,7 +58,15 @@ def gather_metrics(ckpt_file, metrics):
                 _data = {metric: float('nan')}
 
         # Convert out of torch to play more nicely with pandas
-        _data = {k: (v.item() if torch.is_tensor(v) else v) for k, v in _data.items()}
+        def cast_type(val):
+            if torch.is_tensor(val):
+                if val.numel() == 1:
+                    return val.item()
+                else:
+                    return val.numpy()
+            else:
+                return val
+        _data = {k: cast_type(v) for k, v in _data.items()}
 
         # Insert or update data stored at keyed_rows[_key]
         keyed_rows[_key] = merge_dicts(keyed_rows.get(_key, {}), _data)
