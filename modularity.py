@@ -231,3 +231,7 @@ def alignment_score(cluster1, cluster2):
 def shuffled_alignment_score(cluster1, cluster2, n_shuffle=10000):
     n = cluster1.size()[0]
     return torch.tensor([alignment_score(cluster1[torch.randperm(n), :], cluster2) for _ in trange(n_shuffle, leave=False)])
+
+
+def sort_by_cluster(cluster):
+    return torch.tensor(cluster).argmax(dim=1).argsort()
