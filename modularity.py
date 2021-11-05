@@ -1,5 +1,6 @@
 import torch
 from collections import deque
+from probability import entropy_to_temperature, discrete_entropy, log2prob
 from tqdm import trange, tqdm
 
 
@@ -134,25 +135,41 @@ def spectral_modularity(adj, max_clusters=None) -> torch.Tensor:
     return clusters
 
 
-def monte_carlo_modularity(adj, clusters=None, max_clusters=None, steps=10000, temperature=1.0):
+def monte_carlo_modularity(adj, clusters=None, max_clusters=None, steps=10000, target_entropy=0.15, device='cpu'):
     """Optimize GN modularity by initializing using spectral method, then repeatedly shuffling values around with
     probability proportional to how good the GN score is after that shuffle. Return the best-scoring clustering
+
+    Each step, the temperature of the multinomial distribution is selected (scores are scaled) to match the given
+    target entropy, which effectively sets the number of 'choices' for moves on each step. Testing suggests that
+    an entropy of 0.1 (1.1ish options per step) is a good value.
     """
+    adj = adj.to(device)
+
+    assert is_valid_adjacency_matrix(adj, enforce_sym=True), \
+        "monte_carlo_modularity expects a symmetric matrix of associations"
+
     if clusters is None:
         clusters = spectral_modularity(adj, max_clusters=max_clusters)
 
     max_clusters = clusters.size(1)
     best_score, best_clusters = girvan_newman_sym(adj, clusters).cpu(), clusters.clone()
     scores_history = torch.zeros(steps)
+    temperature_history = torch.zeros(steps)
+    entropy_history = torch.zeros(steps)
     # Some elements are initially not clustered ("dead") – don't bother moving these around
     is_dead = clusters.sum(dim=1) == 0.
     # Quit early if there are no units to move around
     if torch.all(is_dead):
         return clusters, torch.tensor(float('nan'))
 
+    # At each step, we sample a new cluster with probability proportional to exp(score/temperature).
+    # Keep track of the temperature from the previous iteration since it's a good guess for the
+    # next iteration.
+    temperature = 1.0
+
     # Pick a random item to shuffle around in each step
     ishuffle = torch.multinomial((~is_dead).float(), num_samples=steps, replacement=True)
-    for i, idx in tqdm(enumerate(ishuffle), desc=f'MC shuffles [T={temperature:.2e}]', leave=False, total=steps):
+    for i, idx in tqdm(enumerate(ishuffle), desc=f'MC shuffles', leave=False, total=steps):
         # Consider all possible re-assignments, but only consider creating a new column at most 1 time
         scores, did_new_col = float('-inf')*torch.ones(max_clusters), False
         for j in range(max_clusters):
@@ -169,8 +186,12 @@ def monte_carlo_modularity(adj, clusters=None, max_clusters=None, steps=10000, t
                 if scores[j] > best_score:
                     best_score = scores[j]
                     best_clusters = clusters.clone()
+        # Viewing scores as an energy, select temperature to match the target entropy
+        temperature = entropy_to_temperature(scores, target_entropy, init_t=temperature, eps=0.01)
+        # Keep a record of temperatures and entropies along the way
+        temperature_history[i], entropy_history[i] = temperature, discrete_entropy(scores/temperature)
         # Pick randomly among decent-scoring options
-        choice = torch.multinomial(torch.exp((scores - scores.max())/temperature), num_samples=1)
+        choice = torch.multinomial(log2prob(scores/temperature), num_samples=1)
         clusters[idx, :] = 0.
         clusters[idx, choice] = 1.
         scores_history[i] = scores[choice]
@@ -178,7 +199,7 @@ def monte_carlo_modularity(adj, clusters=None, max_clusters=None, steps=10000, t
     # Sanity check: only those units initially pruned as 'dead' should be missing
     assert torch.all((best_clusters.sum(dim=1) == 0.) == is_dead)
 
-    return best_clusters, scores_history
+    return best_clusters.cpu(), scores_history.cpu(), temperature_history.cpu(), entropy_history.cpu()
 
 
 def gradient_ascent_modularity(adj, max_k=None, steps=5000, num_init=100):

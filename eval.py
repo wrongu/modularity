@@ -9,6 +9,9 @@ from warnings import warn
 from tqdm import tqdm
 
 
+__VERSION = 3
+
+
 def loss(mdl, dataset, task, device='cpu'):
     mdl.eval()
     loss = 0.0
@@ -71,13 +74,13 @@ def evaluate(checkpoint_file, data_dir, metrics=None):
     return info
 
 
-def eval_modularity(checkpoint_file, data_dir, temperatures=None, metrics=None, device='cpu'):
+def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=5000, metrics=None, device='cpu'):
     info = torch.load(checkpoint_file)
     model = LitWrapper.load_from_checkpoint(checkpoint_file)
     _, _, data_test = model.get_dataset(data_dir)
 
-    if temperatures is None:
-        temperatures = torch.logspace(-4, -2, 7)
+    # Use defaults unless target_entropy is given
+    mc_kwargs = {} if target_entropy is None else {'target_entropy': target_entropy}
 
     if metrics is None:
         metrics = ['forward_cov', 'forward_cov_norm', 'backward_hess', 'backward_hess_norm',
@@ -96,7 +99,7 @@ def eval_modularity(checkpoint_file, data_dir, temperatures=None, metrics=None, 
     # For each requested method, compute and store (1) cluster assignments and (2) modularity score
     module_info = info.get('modules', {})
     for meth in metrics:
-        if meth not in module_info or module_info[meth] == []:
+        if meth not in module_info or module_info[meth] == [] or module_info[meth][0].get('version', 0) < __VERSION:
             module_info[meth] = []
             for adj in info['assoc'][meth]:
                 adj = adj - adj.diag().diag()
@@ -106,25 +109,25 @@ def eval_modularity(checkpoint_file, data_dir, temperatures=None, metrics=None, 
                         'adj': adj.cpu(),
                         'clusters': float('nan')*torch.ones(adj.size()),
                         'score': float('nan'),
-                        'mc_scores': float('nan')*torch.ones(5000),
+                        'mc_scores': float('nan')*torch.ones(mc_steps),
                         'num_clusters': float('nan'),
-                        'temperature': float('nan')
+                        'mc_temperatures': float('nan')*torch.ones(mc_steps),
+                        'mc_entropies': float('nan')*torch.ones(mc_steps),
+                        'version': __VERSION
                     })
                     continue
 
-                best_clusters, best_scores, best_temp = None, float('-inf')*torch.ones(()), temperatures[0]
-                for temp in temperatures:
-                    clusters, mc_scores = monte_carlo_modularity(adj, steps=5000, temperature=temp)
-                    if mc_scores.max() > best_scores.max():
-                        best_clusters, best_scores, best_temp = clusters, mc_scores, temp
+                clusters, mc_scores, mc_temps, mc_ents = monte_carlo_modularity(adj, steps=mc_steps, **mc_kwargs)
 
                 module_info[meth].append({
                     'adj': adj.cpu(),
-                    'clusters': best_clusters.cpu(),
-                    'score': girvan_newman(adj, best_clusters).cpu(),
-                    'mc_scores': best_scores.cpu(),
-                    'num_clusters': soft_num_clusters(best_clusters).cpu(),
-                    'temperature': best_temp
+                    'clusters': clusters.cpu(),
+                    'score': girvan_newman(adj, clusters).cpu(),
+                    'mc_scores': mc_scores.cpu(),
+                    'num_clusters': soft_num_clusters(clusters).cpu(),
+                    'mc_temperatures': mc_temps,
+                    'mc_entropies': mc_ents,
+                    'version': __VERSION
                 })
     info['modules'] = module_info
 
@@ -135,16 +138,19 @@ def eval_modularity(checkpoint_file, data_dir, temperatures=None, metrics=None, 
             # Sort methods so key is always in alphabetical order <method a>:<method b>
             meth_a, meth_b = min([meth1, meth2]), max([meth1, meth2])
             key = meth_a + ":" + meth_b
-            alignment_info[key] = []
-            for info1, info2 in zip(info['modules'][meth_a], info['modules'][meth_b]):
-                score = alignment_score(info1['clusters'], info2['clusters'])
-                shuffle_scores = shuffled_alignment_score(info1['clusters'], info2['clusters'], n_shuffle=2000)
-                alignment_info[key].append({
-                    'score': score,
-                    'p': (shuffle_scores > score).float().mean(),
-                    'null': shuffle_scores,
-                    'version': 2
-                })
+            if key not in alignment_info or alignment_info[key] == [] or alignment_info[key][0].get('version', 0) < __VERSION:
+                alignment_info[key] = []
+                # Loop over network layers
+                for info1, info2 in zip(info['modules'][meth_a], info['modules'][meth_b]):
+                    c1, c2 = info1['clusters'].to(device), info2['clusters'].to(device)
+                    score = alignment_score(c1, c2).cpu()
+                    shuffle_scores = shuffled_alignment_score(c1, c2, n_shuffle=5000).cpu()
+                    alignment_info[key].append({
+                        'score': score,
+                        'p': (shuffle_scores > score).float().mean(),
+                        'null': shuffle_scores,
+                        'version': __VERSION
+                    })
     info['align'] = alignment_info
 
     torch.save(info, checkpoint_file)
@@ -161,20 +167,17 @@ if __name__ == '__main__':
     parser.add_argument('--data-dir', default=Path('data'), metavar='DATA', type=Path)
     parser.add_argument('--device', default='cpu')
     parser.add_argument('--metrics', default='train_acc,val_acc,test_acc,l1_norm,l2_norm')
-    parser.add_argument('--temperatures', default=None)
+    parser.add_argument('--target-entropy', default=None)
     parser.add_argument('--modularity-metrics', default='')
     args = parser.parse_args()
 
     eval_metrics = args.metrics.split(",") if args.metrics != '' else []
     mod_metrics = args.modularity_metrics.split(",") if args.modularity_metrics != '' else []
 
-    if args.temperatures is not None:
-        args.temperatures = [float(s.strip()) for s in args.temperatures.split(',')]
-
     pprint(eval_metrics)
     pprint(mod_metrics)
 
     evaluate(args.ckpt_file, args.data_dir, eval_metrics)
-    eval_modularity(args.ckpt_file, args.data_dir, metrics=mod_metrics, device=args.device, temperatures=args.temperatures)
+    eval_modularity(args.ckpt_file, args.data_dir, metrics=mod_metrics, device=args.device, target_entropy=args.target_entropy)
     info = torch.load(args.ckpt_file)
     pprint({k: info[k] for k in eval_metrics if k in info})
