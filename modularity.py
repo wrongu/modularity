@@ -63,6 +63,29 @@ def girvan_newman_sym(adj:torch.Tensor, clusters:torch.Tensor):
     return cluster_connectivity - expected_connectivity
 
 
+def sparsify(adj:torch.Tensor, fraction:float) -> torch.Tensor:
+    """Sparsify and binarize a continuous adjacency/association matrix, keeping the top 'fraction' percent of elements
+
+    Note: 'dead' rows/columns that are all zeros to begin with don't count towards sparsity, and neither does the main
+    diagonal, which is set to zero regardless.
+    """
+    # First, remove the diagonal
+    adj = adj - adj.diag().diag()
+    # Select all off-diagonal elements
+    i, j = torch.tril_indices(*adj.size(), offset=1)
+    off_diag = adj[i, j]
+    # Adjust fraction such that it is relative to the total number of nonzero elements
+    frac_nonzero = (off_diag != 0).float().mean()
+    # Quit early if there aren't any nonzero elements
+    if frac_nonzero == 0.:
+        return adj.new_zeros(adj.size())
+    fraction = fraction * frac_nonzero
+    # Find whatever value lives at the 'fraction'th quantile of all off-diagonal values
+    cutoff = torch.quantile(off_diag[off_diag != 0], 1-fraction)
+    # Set to 0 or 1 based on the cutoff
+    return torch.where(adj < cutoff, 0., 1.)
+
+
 def spectral_modularity(adj, max_clusters=None) -> torch.Tensor:
     """Spectral algorithm to quickly find an approximate maximum for the Girvan-Newman modularity score.
 

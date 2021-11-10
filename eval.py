@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from models import LitWrapper
 from associations import get_associations
 from modularity import monte_carlo_modularity, girvan_newman, soft_num_clusters, is_valid_adjacency_matrix, \
-    alignment_score, shuffled_alignment_score
+    alignment_score, shuffled_alignment_score, sparsify
 from torch.utils.data import DataLoader
 from warnings import warn
 from tqdm import tqdm
@@ -74,7 +74,7 @@ def evaluate(checkpoint_file, data_dir, metrics=None):
     return info
 
 
-def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=5000, metrics=None, device='cpu'):
+def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=5000, metrics=None, sparseness=None, align=True, device='cpu'):
     info = torch.load(checkpoint_file)
     model = LitWrapper.load_from_checkpoint(checkpoint_file)
     _, _, data_test = model.get_dataset(data_dir)
@@ -83,6 +83,11 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
     mc_kwargs = {'device': device}
     if target_entropy is not None:
         mc_kwargs['target_entropy'] = target_entropy
+
+    if sparseness is None:
+        sparseness = [None]
+    else:
+        sparseness = [None] + list(sparseness)
 
     if metrics is None:
         metrics = ['forward_cov', 'forward_cov_norm', 'backward_hess', 'backward_hess_norm',
@@ -100,42 +105,53 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
     # For each requested method, compute and store (1) cluster assignments and (2) modularity score
     module_info = info.get('modules', {})
     for meth in metrics:
-        if meth not in module_info or module_info[meth] == [] or module_info[meth][0].get('version', 0) < __VERSION:
-            module_info[meth] = []
-            for adj in info['assoc'][meth]:
-                adj = adj - adj.diag().diag()
-                if not is_valid_adjacency_matrix(adj, enforce_sym=True, enforce_no_self=True):
-                    warn(f"Second sanity check on association method {meth} failed!")
-                    module_info[meth].append({
-                        'adj': adj.cpu(),
-                        'clusters': float('nan')*torch.ones(adj.size()),
-                        'score': float('nan'),
-                        'mc_scores': float('nan')*torch.ones(mc_steps),
+        for sp in sparseness:
+            key = meth if sp is None else f"{meth}.{sp:.2f}"
+            if key not in module_info or module_info[key] == [] or module_info[key][0].get('version', 0) < __VERSION:
+                module_info[key] = []
+                for adj in info['assoc'][meth]:
+                    adj = adj - adj.diag().diag()
+                    if not is_valid_adjacency_matrix(adj, enforce_sym=True, enforce_no_self=True):
+                        warn(f"Second sanity check on association method {meth} failed!")
+                        module_info[key].append({
+                            'adj': adj.cpu(),
+                            'sparse': sp,
+                            'clusters': float('nan')*torch.ones(adj.size()),
+                            'score': float('nan'),
+                            'mc_scores': float('nan')*torch.ones(mc_steps),
                         'num_clusters': float('nan'),
                         'mc_temperatures': float('nan')*torch.ones(mc_steps),
                         'mc_entropies': float('nan')*torch.ones(mc_steps),
                         'version': __VERSION
+                        })
+                        continue
+
+                    if sp is not None:
+                        adj = sparsify(adj, sp)
+
+                    print(f"Running modules.{key} on {device}")
+                    clusters, mc_scores, mc_temps, mc_ents = monte_carlo_modularity(adj, steps=mc_steps, **mc_kwargs)
+
+                    module_info[key].append({
+                        'adj': adj.cpu(),
+                        'sparse': sp,
+                        'clusters': clusters.cpu(),
+                        'score': girvan_newman(adj.cpu(), clusters.cpu()),
+                        'mc_scores': mc_scores.cpu(),
+                        'num_clusters': soft_num_clusters(clusters.cpu()),
+                        'mc_temperatures': mc_temps.cpu(),
+                        'mc_entropies': mc_ents.cpu(),
+                        'version': __VERSION
                     })
-                    continue
-
-                clusters, mc_scores, mc_temps, mc_ents = monte_carlo_modularity(adj, steps=mc_steps, **mc_kwargs)
-
-                module_info[meth].append({
-                    'adj': adj.cpu(),
-                    'clusters': clusters.cpu(),
-                    'score': girvan_newman(adj, clusters).cpu(),
-                    'mc_scores': mc_scores.cpu(),
-                    'num_clusters': soft_num_clusters(clusters).cpu(),
-                    'mc_temperatures': mc_temps,
-                    'mc_entropies': mc_ents,
-                    'version': __VERSION
-                })
+            else:
+                print(f"Skipping modules.{key} -- already done!")
     info['modules'] = module_info
 
     # Compute module alignments
-    alignment_info = info.get('align', {})
-    for i, meth1 in enumerate(metrics):
-        for meth2 in metrics[i:]:
+    if align:
+        alignment_info = info.get('align', {})
+        for i, meth1 in enumerate(metrics):
+            for meth2 in metrics[i:]:
             # Sort methods so key is always in alphabetical order <method a>:<method b>
             meth_a, meth_b = min([meth1, meth2]), max([meth1, meth2])
             key = meth_a + ":" + meth_b
@@ -170,15 +186,24 @@ if __name__ == '__main__':
     parser.add_argument('--metrics', default='train_acc,val_acc,test_acc,l1_norm,l2_norm')
     parser.add_argument('--target-entropy', default=None)
     parser.add_argument('--modularity-metrics', default='')
+    parser.add_argument('--modularity-sparseness', default='')
+    parser.add_argument('--skip-alignment', action='store_true', default=False)
     args = parser.parse_args()
 
     eval_metrics = args.metrics.split(",") if args.metrics != '' else []
     mod_metrics = args.modularity_metrics.split(",") if args.modularity_metrics != '' else []
+    # Sparseness is either a list of floats, parsed from comma-separated inputs, or None
+    sparseness = [float(s) for s in args.modularity_sparseness.split(",")] if args.modularity_sparseness != '' else None
 
     pprint(eval_metrics)
     pprint(mod_metrics)
 
     evaluate(args.ckpt_file, args.data_dir, eval_metrics)
-    eval_modularity(args.ckpt_file, args.data_dir, metrics=mod_metrics, device=args.device, target_entropy=args.target_entropy)
+    eval_modularity(args.ckpt_file, args.data_dir,
+                    metrics=mod_metrics,
+                    device=args.device,
+                    target_entropy=args.target_entropy,
+                    sparseness=sparseness,
+                    align=not args.skip_alignment)
     info = torch.load(args.ckpt_file)
     pprint({k: info[k] for k in eval_metrics if k in info})
