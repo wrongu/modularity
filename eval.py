@@ -119,10 +119,10 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
                             'clusters': float('nan')*torch.ones(adj.size()),
                             'score': float('nan'),
                             'mc_scores': float('nan')*torch.ones(mc_steps),
-                        'num_clusters': float('nan'),
-                        'mc_temperatures': float('nan')*torch.ones(mc_steps),
-                        'mc_entropies': float('nan')*torch.ones(mc_steps),
-                        'version': __VERSION
+                            'num_clusters': float('nan'),
+                            'mc_temperatures': float('nan')*torch.ones(mc_steps),
+                            'mc_entropies': float('nan')*torch.ones(mc_steps),
+                            'version': __VERSION
                         })
                         continue
 
@@ -152,23 +152,23 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
         alignment_info = info.get('align', {})
         for i, meth1 in enumerate(metrics):
             for meth2 in metrics[i:]:
-            # Sort methods so key is always in alphabetical order <method a>:<method b>
-            meth_a, meth_b = min([meth1, meth2]), max([meth1, meth2])
-            key = meth_a + ":" + meth_b
-            if key not in alignment_info or alignment_info[key] == [] or alignment_info[key][0].get('version', 0) < __VERSION:
-                alignment_info[key] = []
-                # Loop over network layers
-                for info1, info2 in zip(info['modules'][meth_a], info['modules'][meth_b]):
-                    c1, c2 = info1['clusters'].to(device), info2['clusters'].to(device)
-                    score = alignment_score(c1, c2).cpu()
-                    shuffle_scores = shuffled_alignment_score(c1, c2, n_shuffle=5000).cpu()
-                    alignment_info[key].append({
-                        'score': score,
-                        'p': (shuffle_scores > score).float().mean(),
-                        'null': shuffle_scores,
-                        'version': __VERSION
-                    })
-    info['align'] = alignment_info
+                # Sort methods so key is always in alphabetical order <method a>:<method b>
+                meth_a, meth_b = min([meth1, meth2]), max([meth1, meth2])
+                key = meth_a + ":" + meth_b
+                if key not in alignment_info or alignment_info[key] == [] or alignment_info[key][0].get('version', 0) < __VERSION:
+                    alignment_info[key] = []
+                    # Loop over network layers
+                    for info1, info2 in zip(info['modules'][meth_a], info['modules'][meth_b]):
+                        c1, c2 = info1['clusters'].to(device), info2['clusters'].to(device)
+                        score = alignment_score(c1, c2).cpu()
+                        shuffle_scores = shuffled_alignment_score(c1, c2, n_shuffle=5000).cpu()
+                        alignment_info[key].append({
+                            'score': score,
+                            'p': (shuffle_scores > score).float().mean(),
+                            'null': shuffle_scores,
+                            'version': __VERSION
+                        })
+        info['align'] = alignment_info
 
     torch.save(info, checkpoint_file)
     return info

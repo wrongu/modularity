@@ -26,16 +26,25 @@ def gather_metrics(ckpt_file, metrics):
         parts = metric.split('.')
         if parts[0] == "modules":
             # Parse metric of the form "modules.<assoc_method>.<layer_number>.<field>"
-            # Create a row for each unique combination of assoc_method and layer_number
-            assoc, layer, field = parts[1], int(parts[2]), parts[3]
-            # Update this 'field' for the row specified by 'assoc' and 'layer'
-            _key = f"{assoc}_{layer}"
+            # or modules.<assoc_method>.0.20.<layer_number>.<field> where the "0.20" part is sparsity level (note the
+            # extra '.' in the decimal place, making the number of parts 6 rather than 5)
+            if len(parts) == 6:
+                assoc, sparsity, layer, field = parts[1], float(".".join(parts[2:4])), int(parts[4]), parts[5]
+            elif len(parts) == 4:
+                assoc, layer, field = parts[1], int(parts[2]), parts[3]
+                sparsity = None
+            else:
+                raise ValueError(f"Unparseable parts: {metric}")
+            # Update this 'field' for the row specified by 'assoc', 'sparsity', and 'layer'. These specify a row; all
+            # other fields per row will be given a value in their own column.
+            _key = f"{assoc}_{sparsity}_{layer}"
+            _data = {"assoc": assoc, "layer": layer, "sparsity": sparsity}
             try:
-                _data = {"assoc": assoc, "layer": layer, field: info["modules"][assoc][layer][field]}
+                _data[field] = info["modules"][assoc][layer][field]
             except Exception as e:
                 if not (isinstance(e, KeyError) or isinstance(e, IndexError)):
                     raise e
-                _data = {"assoc": assoc, "layer": layer, field: float('nan')}
+                _data[field] = float('nan')
         elif parts[0] == "align":
             # Parse metric of the form "aslign.<assoc_method_1>:<assoc_method_2>.<layer_number>.<field>". Create a new
             # row per unique pair of association methods.
@@ -57,7 +66,7 @@ def gather_metrics(ckpt_file, metrics):
             except KeyError:
                 _data = {metric: float('nan')}
 
-        # Convert out of torch to play more nicely with pandas
+    # Convert out of torch to play more nicely with pandas
         def cast_type(val):
             if torch.is_tensor(val):
                 if val.numel() == 1:
