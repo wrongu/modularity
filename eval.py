@@ -80,7 +80,9 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
     _, _, data_test = model.get_dataset(data_dir)
 
     # Use defaults unless target_entropy is given
-    mc_kwargs = {} if target_entropy is None else {'target_entropy': target_entropy}
+    mc_kwargs = {'device': device}
+    if target_entropy is not None:
+        mc_kwargs['target_entropy'] = target_entropy
 
     if metrics is None:
         metrics = ['forward_cov', 'forward_cov_norm', 'backward_hess', 'backward_hess_norm',
@@ -93,7 +95,6 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
             assoc_info[meth] = get_associations(model, meth, data_test, device=device)
             if not all(is_valid_adjacency_matrix(m, enforce_sym=True) for m in assoc_info[meth]):
                 warn(f"First sanity check on association method {meth} failed!")
-                metrics.remove(meth)
     info['assoc'] = assoc_info
 
     # For each requested method, compute and store (1) cluster assignments and (2) modularity score
