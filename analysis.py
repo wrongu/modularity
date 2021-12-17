@@ -35,29 +35,39 @@ def gather_metrics(ckpt_file, metrics):
                 sparsity = None
             else:
                 raise ValueError(f"Unparseable parts: {metric}")
+            sparsity_suffix = "" if sparsity is None else f".{sparsity:.2f}"
             # Update this 'field' for the row specified by 'assoc', 'sparsity', and 'layer'. These specify a row; all
             # other fields per row will be given a value in their own column.
-            _key = f"{assoc}_{sparsity}_{layer}"
+            _key = f"{assoc}{sparsity_suffix}_{layer}"
             _data = {"assoc": assoc, "layer": layer, "sparsity": sparsity}
             try:
-                _data[field] = info["modules"][assoc][layer][field]
+                _data[field] = info["modules"][assoc+sparsity_suffix][layer][field]
             except Exception as e:
                 if not (isinstance(e, KeyError) or isinstance(e, IndexError)):
                     raise e
                 _data[field] = float('nan')
         elif parts[0] == "align":
-            # Parse metric of the form "aslign.<assoc_method_1>:<assoc_method_2>.<layer_number>.<field>". Create a new
+            # Parse metric of the form "align.<assoc_method_1>:<assoc_method_2>.<layer_number>.<field>". Create a new
             # row per unique pair of association methods.
-            (assoc_a, assoc_b), layer, field = sorted(parts[1].split(':')), int(parts[2]), parts[3]
+            # Also handle queries like "align.<assoc_method_1>:<assoc_method_2>.<sparse>.<layer_number>.<field>" for
+            # a given 'sparseness' level... as above, this increases the #parts by 2 since <sparse> is in format "%.2f"
+            if len(parts) == 4:
+                (assoc_a, assoc_b), layer, field = sorted(parts[1].split(':')), int(parts[2]), parts[3]
+                sparsity = None
+            elif len(parts) == 6:
+                (assoc_a, assoc_b), sparsity, layer, field = sorted(parts[1].split(':')), float(".".join(parts[2:4])), int(parts[4]), parts[5]
+            else:
+                raise ValueError(f"Unparseable parts: {metric}")
+            sparsity_suffix = "" if sparsity is None else f".{sparsity:.2f}"
             # Update this 'field' for the row specified by the two 'assoc' methods (in sorted order) and 'layer'
-            _key = f"{assoc_a}_{assoc_b}_{layer}"
+            _key = f"{assoc_a}_{assoc_b}{sparsity_suffix}_{layer}"
+            _data = {"assoc_a": assoc_a, "assoc_b": assoc_b, "layer": layer, "sparsity": sparsity}
             try:
-                _data = {"assoc_a": assoc_a, "assoc_b": assoc_b, "layer": layer,
-                         field: info["align"][assoc_a + ":" + assoc_b][layer][field]}
+                _data[field] = info["align"][assoc_a + ":" + assoc_b + sparsity_suffix][layer][field]
             except Exception as e:
                 if not (isinstance(e, KeyError) or isinstance(e, IndexError)):
                     raise e
-                _data = {"assoc_a": assoc_a, "assoc_b": assoc_b, "layer": layer, field: float('nan')}
+                _data[field] = float('nan')
         else:
             # No parsing in default case. Just get values and add to existing row.
             _key = "basic"

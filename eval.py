@@ -3,13 +3,17 @@ import torch.nn.functional as F
 from models import LitWrapper
 from associations import get_associations
 from modularity import monte_carlo_modularity, girvan_newman, soft_num_clusters, is_valid_adjacency_matrix, \
-    alignment_score, shuffled_alignment_score, sparsify
+    alignment_score, shuffled_alignment_score, sparsify, cluster_id
 from torch.utils.data import DataLoader
+from scipy.stats import spearmanr
+from clusim.clustering import Clustering
+import clusim.sim as sim
 from warnings import warn
 from tqdm import tqdm
 
 
-__VERSION = 3
+__MOD_VERSION = 3
+__ALIGN_VERSION = 5
 
 
 def loss(mdl, dataset, task, device='cpu'):
@@ -46,7 +50,7 @@ def evaluate(checkpoint_file, data_dir, metrics=None):
     data_train, data_val, data_test = model.get_dataset(data_dir)
 
     if metrics is None:
-        metrics = ['train_loss', 'train_acc', 'val_loss', 'val_acc', 'test_loss', 'test_acc', 'l1_norm', 'l2_norm']
+        metrics = ['train_loss', 'train_acc', 'val_loss', 'val_acc', 'test_loss', 'test_acc', 'l1_norm', 'l2_norm', 'sparsity']
 
     # Loss and accuracy metrics
     if 'train_loss' not in info and 'train_loss' in metrics:
@@ -69,6 +73,8 @@ def evaluate(checkpoint_file, data_dir, metrics=None):
         info['l2_norm'] = model.l2_norm().detach()
     if 'l1_norm' not in info and 'l1_norm' in metrics:
         info['l1_norm'] = model.l1_norm().detach()
+    if 'sparsity' in metrics:
+        info['sparsity'] = model.sparsity().detach()
 
     torch.save(info, checkpoint_file)
     return info
@@ -107,7 +113,7 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
     for meth in metrics:
         for sp in sparseness:
             key = meth if sp is None else f"{meth}.{sp:.2f}"
-            if key not in module_info or module_info[key] == [] or module_info[key][0].get('version', 0) < __VERSION:
+            if key not in module_info or module_info[key] == [] or module_info[key][0].get('version', 0) < __MOD_VERSION:
                 module_info[key] = []
                 for adj in info['assoc'][meth]:
                     adj = adj - adj.diag().diag()
@@ -122,7 +128,7 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
                             'num_clusters': float('nan'),
                             'mc_temperatures': float('nan')*torch.ones(mc_steps),
                             'mc_entropies': float('nan')*torch.ones(mc_steps),
-                            'version': __VERSION
+                            'version': __MOD_VERSION
                         })
                         continue
 
@@ -130,7 +136,23 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
                         adj = sparsify(adj, sp)
 
                     print(f"Running modules.{key} on {device}")
-                    clusters, mc_scores, mc_temps, mc_ents = monte_carlo_modularity(adj, steps=mc_steps, **mc_kwargs)
+                    try:
+                        clusters, mc_scores, mc_temps, mc_ents = monte_carlo_modularity(adj, steps=mc_steps, **mc_kwargs)
+                    except RuntimeError:
+                        print(f"Error in modules.{key}... storing NaN values")
+                        module_info[key].append({
+                            'adj': adj.cpu(),
+                            'sparse': sp,
+                            'clusters': float('nan')*torch.ones(adj.size()),
+                            'score': float('nan'),
+                            'mc_scores': float('nan')*torch.ones(mc_steps),
+                            'num_clusters': float('nan'),
+                            'mc_temperatures': float('nan')*torch.ones(mc_steps),
+                            'mc_entropies': float('nan')*torch.ones(mc_steps),
+                            'version': __MOD_VERSION
+                        })
+                        continue
+
 
                     module_info[key].append({
                         'adj': adj.cpu(),
@@ -141,7 +163,7 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
                         'num_clusters': soft_num_clusters(clusters.cpu()),
                         'mc_temperatures': mc_temps.cpu(),
                         'mc_entropies': mc_ents.cpu(),
-                        'version': __VERSION
+                        'version': __MOD_VERSION
                     })
             else:
                 print(f"Skipping modules.{key} -- already done!")
@@ -152,22 +174,43 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
         alignment_info = info.get('align', {})
         for i, meth1 in enumerate(metrics):
             for meth2 in metrics[i:]:
-                # Sort methods so key is always in alphabetical order <method a>:<method b>
-                meth_a, meth_b = min([meth1, meth2]), max([meth1, meth2])
-                key = meth_a + ":" + meth_b
-                if key not in alignment_info or alignment_info[key] == [] or alignment_info[key][0].get('version', 0) < __VERSION:
-                    alignment_info[key] = []
-                    # Loop over network layers
-                    for info1, info2 in zip(info['modules'][meth_a], info['modules'][meth_b]):
-                        c1, c2 = info1['clusters'].to(device), info2['clusters'].to(device)
-                        score = alignment_score(c1, c2).cpu()
-                        shuffle_scores = shuffled_alignment_score(c1, c2, n_shuffle=5000).cpu()
-                        alignment_info[key].append({
-                            'score': score,
-                            'p': (shuffle_scores > score).float().mean(),
-                            'null': shuffle_scores,
-                            'version': __VERSION
-                        })
+                for sp in sparseness:
+                    # Sort methods so key is always in alphabetical order <method a>:<method b>
+                    meth_a, meth_b = min([meth1, meth2]), max([meth1, meth2])
+                    key = meth_a + ":" + meth_b
+                    if sp is not None:
+                        key = key + f".{sp:.2f}"
+                        meth_a = meth_a + f".{sp:.2f}"
+                        meth_b = meth_b + f".{sp:.2f}"
+                    if key not in alignment_info or alignment_info[key] == [] or alignment_info[key][0].get('version', 0) < __ALIGN_VERSION:
+                        # Create or re-load a dictionary of alignment stats per layer. In the subsequent loop, writing
+                        # values to 'this_align_info' modifies everything in place.
+                        num_layers = len(info['modules'][meth_a])
+                        alignment_info[key] = alignment_info.get(key, [{} for _ in range(num_layers)])
+                        # Loop over network layers
+                        for info1, info2, this_align_info in zip(info['modules'][meth_a], info['modules'][meth_b], alignment_info[key]):
+                            adj_a, adj_b = info1['adj'], info2['adj']
+                            c1, c2 = info1['clusters'].to(device), info2['clusters'].to(device)
+                            if 'adj_spearman_r' not in this_align_info:
+                                triu_ij = torch.triu_indices(*adj_a.size(), offset=1)
+                                this_align_info['adj_spearman_r'], this_align_info['adj_spearman_p'] = \
+                                    spearmanr(adj_a[triu_ij[0], triu_ij[1]], adj_b[triu_ij[0], triu_ij[1]])
+                            if 'score' not in this_align_info:
+                                this_align_info['score'] = alignment_score(c1, c2).cpu()
+                            if 'null' not in this_align_info:
+                                shuffle_scores = shuffled_alignment_score(c1, c2, n_shuffle=5000).cpu()
+                                this_align_info['null'] = shuffle_scores
+                                this_align_info['p'] = (shuffle_scores > this_align_info['score']).float().mean()
+                            if 'rmi' not in this_align_info:
+                                clu_c1 = Clustering(elm2clu_dict={i:[c.item()] for i, c in enumerate(cluster_id(c1.detach()))})
+                                clu_c2 = Clustering(elm2clu_dict={i:[c.item()] for i, c in enumerate(cluster_id(c2.detach()))})
+                                this_align_info['rmi'] = sim.rmi(clu_c1, clu_c2),  # Reduced Mutual Information from clusim package
+                                this_align_info['vi'] = sim.vi(clu_c1, clu_c2),  # Variation in Information from clusim (lower=more similar)
+                                this_align_info['rmi_norm'] = sim.rmi(clu_c1, clu_c2, 'normalized'),  # Reduced Mutual Information from clusim package
+                                this_align_info['vi_norm'] = sim.vi(clu_c1, clu_c2, 'entropy'),  # Variation in Information from clusim (lower=more similar)
+                                this_align_info['element_sim'] = sim.element_sim(clu_c1, clu_c2),  # Element-centric similarity from clusim
+                            this_align_info['sparse'] = sp
+                            this_align_info['version'] = __ALIGN_VERSION
         info['align'] = alignment_info
 
     torch.save(info, checkpoint_file)
@@ -183,7 +226,7 @@ if __name__ == '__main__':
     parser.add_argument('--ckpt-file', metavar='CKPT', type=Path, required=True)
     parser.add_argument('--data-dir', default=Path('data'), metavar='DATA', type=Path)
     parser.add_argument('--device', default='cpu')
-    parser.add_argument('--metrics', default='train_acc,val_acc,test_acc,l1_norm,l2_norm')
+    parser.add_argument('--metrics', default='train_acc,val_acc,test_acc,l1_norm,l2_norm,sparsity')
     parser.add_argument('--target-entropy', default=None)
     parser.add_argument('--modularity-metrics', default='')
     parser.add_argument('--modularity-sparseness', default='')

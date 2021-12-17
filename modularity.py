@@ -277,5 +277,15 @@ def shuffled_alignment_score(cluster1, cluster2, n_shuffle=10000):
     return torch.tensor([alignment_score(cluster1[torch.randperm(n), :], cluster2) for _ in trange(n_shuffle, leave=False)])
 
 
-def sort_by_cluster(cluster):
-    return torch.tensor(cluster).argmax(dim=1).argsort()
+def cluster_id(cluster):
+    is_dead = torch.all(cluster==0, dim=1)
+    idx = torch.argmax(cluster, dim=1)
+    idx[is_dead] = -1
+    return idx
+
+
+def sort_by_cluster(cluster, remove_dead=False):
+    isort = torch.tensor(cluster).argmax(dim=1).argsort()
+    if remove_dead:
+        isort = torch.tensor([idx for idx in isort if cluster[idx, :].sum() != 0.])
+    return isort
