@@ -183,7 +183,7 @@ def monte_carlo_modularity(adj, clusters=None, max_clusters=None, steps=10000, t
     is_dead = clusters.sum(dim=1) == 0.
     # Quit early if there are no units to move around
     if torch.all(is_dead):
-        return clusters, torch.tensor(float('nan'))
+        return clusters, torch.tensor(float('nan')), torch.tensor(float('nan')), torch.tensor(float('nan'))
 
     # At each step, we sample a new cluster with probability proportional to exp(score/temperature).
     # Keep track of the temperature from the previous iteration since it's a good guess for the

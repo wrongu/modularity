@@ -38,4 +38,4 @@ def entropy_to_temperature(logp, target_entropy, init_t=1.0, min_temp=1e-6, max_
             step /= 2
         else:
             log_t, ent = new_log_t, new_ent
-    return torch.exp(new_log_t).item()
+    return min(max(torch.exp(new_log_t).item(), min_temp), max_temp)
