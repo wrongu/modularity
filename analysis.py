@@ -116,6 +116,8 @@ def get_model_checkpoint(spec, log_dir=Path('logs/')):
         return last_model(log_dir / model.get_uid())
     elif which_checkpoint == 'best':
         return best_model(log_dir / model.get_uid())
+    elif '.ckpt' in which_checkpoint:
+        return log_dir / model.get_uid() / which_checkpoint
     else:
         raise ValueError(f"spec['checkpoint'] must be 'last' or 'best' but as '{which_checkpoint}'")
 
