@@ -79,6 +79,9 @@ class LitWrapper(pl.LightningModule):
     def l2_norm(self):
         return sum((p**2).sum() for p in self.model.parameters() if p.ndim >= 2)
 
+    def nuc_norm(self):
+        return sum(torch.norm(p, p="nuc") for p in self.model.parameters() if p.ndim >= 2)
+
     def sparsity(self, eps=1e-3):
         return torch.mean((torch.cat([p.flatten() for p in self.model.parameters() if p.ndim >= 2], dim=0).abs() < eps).float())
 

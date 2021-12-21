@@ -50,7 +50,7 @@ def evaluate(checkpoint_file, data_dir, metrics=None):
     data_train, data_val, data_test = model.get_dataset(data_dir)
 
     if metrics is None:
-        metrics = ['train_loss', 'train_acc', 'val_loss', 'val_acc', 'test_loss', 'test_acc', 'l1_norm', 'l2_norm', 'sparsity']
+        metrics = ['train_loss', 'train_acc', 'val_loss', 'val_acc', 'test_loss', 'test_acc', 'l1_norm', 'l2_norm', 'sparsity', 'nuc_norm']
 
     # Loss and accuracy metrics
     if 'train_loss' not in info and 'train_loss' in metrics:
@@ -75,6 +75,8 @@ def evaluate(checkpoint_file, data_dir, metrics=None):
         info['l1_norm'] = model.l1_norm().detach()
     if 'sparsity' in metrics:
         info['sparsity'] = model.sparsity().detach()
+    if 'nuc_norm' in metrics:
+        info['nuc_norm'] = model.nuc_norm().detach()
 
     torch.save(info, checkpoint_file)
     return info
@@ -226,7 +228,7 @@ if __name__ == '__main__':
     parser.add_argument('--ckpt-file', metavar='CKPT', type=Path, required=True)
     parser.add_argument('--data-dir', default=Path('data'), metavar='DATA', type=Path)
     parser.add_argument('--device', default='cpu')
-    parser.add_argument('--metrics', default='train_acc,val_acc,test_acc,l1_norm,l2_norm,sparsity')
+    parser.add_argument('--metrics', default='train_acc,val_acc,test_acc,l1_norm,l2_norm,sparsity,nuc_norm')
     parser.add_argument('--target-entropy', default=None)
     parser.add_argument('--modularity-metrics', default='')
     parser.add_argument('--modularity-sparseness', default='')
