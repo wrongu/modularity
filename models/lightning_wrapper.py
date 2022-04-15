@@ -1,7 +1,8 @@
 import torch
 import torchvision
 from torch.utils.data import random_split
-from .mnist import MnistSupervised, MnistAutoEncoder
+from .mnist import MnistSupervised
+from .cifar10 import Cifar10Fast
 import pytorch_lightning as pl
 import torch.nn.functional as F
 
@@ -35,14 +36,19 @@ class LitWrapper(pl.LightningModule):
             self.model = MnistSupervised(pdrop=self.hparams.drop)
             self.dataset, self.hparams.task = 'mnist', 'sup'
             self.loss_fn = lambda x, y, out: F.cross_entropy(out, y)
-        elif self.hparams.dataset.lower() == 'mnist' and self.hparams.task.lower()[:5] == 'unsup':
-            self.model = MnistAutoEncoder(pdrop=self.hparams.drop)
-            self.dataset, self.hparams.task = 'mnist', 'unsup'
-            self.loss_fn = lambda x, y, out: F.mse_loss(out, x.view(x.size(0), -1))
+            input_size = (1, 28, 28)
+        elif self.hparams.dataset.lower() == 'cifar10' and self.hparams.task.lower()[:3] == 'sup':
+            self.model = Cifar10Fast()
+            self.dataset, self.hparams.task = 'cifar10', 'sup'
+            self.loss_fn = lambda x, y, out: F.cross_entropy(out, y)
+            input_size = (3, 32, 32)
         else:
             raise ValueError(f"Unrecognized dataset x task combo: {self.hparams.dataset} x {self.hparams.task}")
 
-        self.hidden_dims = self.model.HIDDEN_DIMS
+        # Discover hidden activity sizes
+        dummy_input = torch.randn(input_size)
+        hidden, _ = self.model(dummy_input.unsqueeze(0))
+        self.hidden_dims = [h.size()[1:] for h in hidden]
 
     def on_load_checkpoint(self, ckpt_file):
         # Instantiate self.model, but let the calling function handle state_dict stuff
@@ -52,44 +58,74 @@ class LitWrapper(pl.LightningModule):
         return self.model(x)
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=1e-3)
+        opt = torch.optim.Adam(self.parameters(), lr=1e-3)
+        sched = {
+            'scheduler': torch.optim.lr_scheduler.ReduceLROnPlateau(opt, factor=0.25, patience=3),
+            'monitor': 'val_loss',
+            'interval': 'epoch',
+            'name': 'LR'
+        }
+        return [opt], [sched]
 
     def training_step(self, batch, batch_idx):
         x, y = batch
         _, out = self(x)
         loss = self.loss_fn(x, y, out)
+        l1_norm = self.l1_norm()
+        l2_norm = self.l2_norm()
+        acc = torch.mean((torch.argmax(out, dim=1) == y).float())
         self.log('train_loss', loss)
-        return loss + self.hparams.l1 * self.l1_norm() + self.hparams.l2 * self.l2_norm()
-
-    def on_epoch_end(self):
-        self.log('l1_norm', self.l1_norm())
-        self.log('l2_norm', self.l2_norm())
+        self.log('l1_norm', l1_norm)
+        self.log('l2_norm', l2_norm)
+        self.log('train_acc', acc)
+        return loss + self.hparams.l1 * l1_norm + self.hparams.l2 * l2_norm
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
         _, out = self(x)
         loss = self.loss_fn(x, y, out)
-        # TODO - is this accumulating? Would this affect early stopping? Or resuming from checkpoints?
+        acc = torch.mean((torch.argmax(out, dim=1) == y).float())
         self.log('val_loss', loss, on_epoch=True)
+        self.log('val_acc', acc, on_epoch=True)
         return loss
 
+    def l1_norm_by_layer(self):
+        return [p.abs().sum() for p in self.model.parameters() if p.ndim >= 2]
+
     def l1_norm(self):
-        return sum(p.abs().sum() for p in self.model.parameters() if p.ndim >= 2)
+        return sum(self.l1_norm_by_layer())
+
+    def l2_norm_by_layer(self):
+        return [(p**2).sum() for p in self.model.parameters() if p.ndim >= 2]
 
     def l2_norm(self):
-        return sum((p**2).sum() for p in self.model.parameters() if p.ndim >= 2)
+        return sum(self.l2_norm_by_layer())
+
+    def nuc_norm_by_layer(self):
+        return [torch.norm(p, p="nuc") for p in self.model.parameters() if p.ndim >= 2]
 
     def nuc_norm(self):
-        return sum(torch.norm(p, p="nuc") for p in self.model.parameters() if p.ndim >= 2)
+        return sum(self.nuc_norm_by_layer())
 
     def sparsity(self, eps=1e-3):
         return torch.mean((torch.cat([p.flatten() for p in self.model.parameters() if p.ndim >= 2], dim=0).abs() < eps).float())
 
+    def sparsity_by_layer(self, eps=1e-3):
+        return [torch.mean((p.flatten().abs() < eps).float()) for p in self.model.parameters() if p.ndim >= 2]
+
     def get_dataset(self, data_dir):
         if self.hparams.dataset.lower() == 'mnist':
             trans = torchvision.transforms.ToTensor()
-            train = torchvision.datasets.MNIST(data_dir / 'mnist', train=True, transform=trans)
+            train = torchvision.datasets.MNIST(data_dir / 'mnist', train=True, transform=trans, download=True)
             test = torchvision.datasets.MNIST(data_dir / 'mnist', train=False, transform=trans)
+        elif self.hparams.dataset.lower() == 'cifar10':
+            train_trans = torchvision.transforms.Compose([
+                torchvision.transforms.ToTensor(),
+                torchvision.transforms.RandomHorizontalFlip()
+            ])
+            trans = torchvision.transforms.ToTensor()
+            train = torchvision.datasets.CIFAR10(data_dir / 'cifar10', train=True, transform=train_trans, download=True)
+            test = torchvision.datasets.CIFAR10(data_dir / 'cifar10', train=False, transform=trans)
         else:
             raise ValueError(f"Unrecognized dataset {self.hparams.dataset}")
 

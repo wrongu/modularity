@@ -22,7 +22,7 @@ if __name__ == '__main__':
     parser.add_argument('--l1', default=0.0, type=float)
     parser.add_argument('--drop', default=0.0, type=float)
     parser.add_argument('--run', default=0, type=int)
-    parser.add_argument('--epochs', default=500, type=int)
+    parser.add_argument('--max-epochs', default=500, type=int)
     parser.add_argument('--seed', default=None)
     # Environment config
     parser.add_argument('--save-dir', metavar='DIR', required=True, type=Path)
@@ -41,8 +41,8 @@ if __name__ == '__main__':
         the_checkpoint = None
     else:
         info = torch.load(the_checkpoint)
-        if info['epoch'] >= args.epochs:
-            print(f"Nothing to do – model is trained up to {args.epochs} epochs already!")
+        if info['epoch'] >= args.max_epochs:
+            print(f"Nothing to do – model is trained up to {args.max_epochs} epochs already!")
             exit(0)
 
     # Do what we can to make things deterministic. NOTE this does not guarantee there will be bit-by-bit agreement in
@@ -61,7 +61,11 @@ if __name__ == '__main__':
 
     # Get dataset split, and construct Trainer and logger. Note: the train/val split is randomized according to pl_model.hparams.seed
     train, val, test = pl_model.get_dataset(args.data_dir)
-    cb = [pl.callbacks.ModelCheckpoint(dirpath=weights_dir, monitor='val_loss', save_last=True, save_top_k=5)]
+    callbacks = [
+        pl.callbacks.EarlyStopping(monitor='val_loss', patience=6, mode='min'),
+        pl.callbacks.ModelCheckpoint(dirpath=weights_dir, monitor='val_loss', save_last=True, save_top_k=3),
+        pl.callbacks.LearningRateMonitor(logging_interval='epoch')
+    ]
     tblogger = TensorBoardLogger(args.save_dir, name=pl_model.get_uid(), version=0)
     # Debug - log info to ensure the train/val/test splits are identical for a given run
     tblogger.experiment.add_image('train_0', train[0][0])
@@ -72,11 +76,12 @@ if __name__ == '__main__':
     # depending on args.run but constant for all other parameters
     pl_model.init_model(set_seed=True)
 
-    trainer = pl.Trainer(logger=tblogger, callbacks=cb, deterministic=True, resume_from_checkpoint=the_checkpoint,
-                         default_root_dir=args.save_dir, gpus=the_gpu, auto_select_gpus=False, max_epochs=args.epochs)
+    trainer = pl.Trainer(logger=tblogger, callbacks=callbacks, deterministic=True,
+                         default_root_dir=args.save_dir, gpus=the_gpu, auto_select_gpus=False,
+                         max_epochs=args.max_epochs)
     # TODO - how do we manage seeds here when resuming from checkpoints? Do we need generator=?
     trainer.fit(pl_model,
-                train_dataloader=DataLoader(train, batch_size=args.batch_size, shuffle=True,
-                                            pin_memory=True, num_workers=args.workers),
+                train_dataloaders=DataLoader(train, batch_size=args.batch_size, shuffle=True,
+                                             pin_memory=True, num_workers=args.workers),
                 val_dataloaders=DataLoader(val, batch_size=args.batch_size,
                                            pin_memory=True, num_workers=args.workers))
