@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 
 __MOD_VERSION = 3
-__ALIGN_VERSION = 5
+__ALIGN_VERSION = 6
 
 
 def loss(mdl, dataset, task, device='cpu'):
@@ -230,6 +230,9 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
                                     this_align_info['rmi_norm'] = sim.rmi(clu_c1, clu_c2, 'normalized'),  # Reduced Mutual Information from clusim package
                                     this_align_info['vi_norm'] = sim.vi(clu_c1, clu_c2, 'entropy'),  # Variation in Information from clusim (lower=more similar)
                                     this_align_info['element_sim'] = sim.element_sim(clu_c1, clu_c2),  # Element-centric similarity from clusim
+                                if 'transfer_AaPb' not in this_align_info:
+                                    this_align_info['transfer_AaPb'] = girvan_newman(info_a['adj'], info_b['clusters'])
+                                    this_align_info['transfer_AbPa'] = girvan_newman(info_b['adj'], info_a['clusters'])
                                 this_align_info['sparse'] = sp
                                 this_align_info['version'] = __ALIGN_VERSION
         info['align'] = alignment_info
