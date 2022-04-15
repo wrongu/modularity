@@ -45,12 +45,6 @@ if __name__ == '__main__':
             print(f"Nothing to do – model is trained up to {args.max_epochs} epochs already!")
             exit(0)
 
-    # Do what we can to make things deterministic. NOTE this does not guarantee there will be bit-by-bit agreement in
-    # FLOPs across different devices! Calling pl.seed_everything is done inside LitWrapper.init_model
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True
-    torch.use_deterministic_algorithms(True)
-
     the_gpu = None
     if args.device == 'auto' and torch.cuda.is_available():
         avail_gpus = [int(d) for d in args.devices]
