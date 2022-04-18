@@ -3,9 +3,7 @@ from torch.utils.data import DataLoader
 from math import ceil
 from tqdm import tqdm
 from typing import List
-
-
-# TODO - consider refactoring to use pl.Trainer.test() with callbacks
+import itertools
 
 
 def corrcov(covariance, eps=1e-12):
@@ -39,6 +37,27 @@ def sum_hessian(loss, hidden_layers: List[torch.Tensor]):
                         torch.autograd.grad(sum_grad[k], h_j, retain_graph=True)[0].sum(dim=0)
             col_offset += dims[j]
         row_offset += dims[i]
+    return hessian
+
+
+def sum_hessian_conv_avg_over_space(loss, conv_feature_planes: torch.Tensor):
+    """Given scalar tensor 'loss' and (b,c,h,w) batch of feature planes, computes (c,c)-size
+     sum of hessians, summed over the batch dimension and averaged over spatial dimensions.
+
+    We make use of the fact that grad^2(f) = grad(grad(f)) and that sum of grads = grad of sum. So, sum(grad^2(f)) is
+    computed as grad(sum(grad(f))), with sums taken over the batch dimension.
+    """
+    b, c, h, w = conv_feature_planes.size()
+    hessian = conv_feature_planes.new_zeros(c, c)
+    grad = torch.autograd.grad(loss, conv_feature_planes, retain_graph=True, create_graph=True)[0]
+    sum_grad = torch.sum(grad, dim=0)
+    for i in range(c):
+        # NOTE: this is inefficient because it computes the hessian w.r.t. all x,y,x',y' pairs of location, only for us
+        # to subselect later where x==x' and y==y'. Alas, torch doesn't let us take the grad w.r.t. a subset of
+        # features, since slice operations break dependency graph.
+        for x, y in tqdm(itertools.product(range(w), range(h)), total=h*w, desc=f'xy[{i}]', leave=False):
+            hess_ixy = torch.autograd.grad(sum_grad[i, y, x], conv_feature_planes, retain_graph=True)[0]
+            hessian[i, :] = hessian[i, :] + hess_ixy[:, :, y, x].sum(dim=0)
     return hessian
 
 
