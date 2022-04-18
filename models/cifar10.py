@@ -71,8 +71,9 @@ class Cifar10Fast(nn.Module):
     DATASET = 'cifar10'
     TASK = 'supervised'
 
-    def __init__(self, channels=(64, 128, 256, 256), concat_pool=True):
+    def __init__(self, pdrop=0.0, channels=(64, 128, 256, 256), concat_pool=True):
         super(Cifar10Fast, self).__init__()
+        self.pdrop = pdrop
 
         # Sizes: (3, 32, 32) --> (channels[0], 32, 32)
         self.conv1 = nn.Conv2d(INPUT_SIZE[0], channels[0], kernel_size=3, stride=1, padding=1, bias=False)
@@ -119,9 +120,9 @@ class Cifar10Fast(nn.Module):
     def forward(self, x):
         batches = x.size(0)
         h0 = self.relu1(self.bn1(self.conv1(x)))
-        h1 = self.layer1(h0)
-        h2 = self.layer2(h1)
-        h3 = self.layer3(h2)
-        h4 = self.layer4(h3)
-        h5 = self.pool(h4)
+        h1 = F.dropout2d(self.layer1(h0), p=self.pdrop, training=self.training)
+        h2 = F.dropout2d(self.layer2(h1), p=self.pdrop, training=self.training)
+        h3 = F.dropout2d(self.layer3(h2), p=self.pdrop, training=self.training)
+        h4 = F.dropout2d(self.layer4(h3), p=self.pdrop, training=self.training)
+        h5 = F.dropout2d(self.pool(h4), p=self.pdrop, training=self.training)
         return [h0, h1, h2, h3, h4, h5], self.proj(h5.view(batches, -1))

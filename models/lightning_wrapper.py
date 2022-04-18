@@ -38,7 +38,7 @@ class LitWrapper(pl.LightningModule):
             self.loss_fn = lambda x, y, out: F.cross_entropy(out, y)
             input_size = (1, 28, 28)
         elif self.hparams.dataset.lower() == 'cifar10' and self.hparams.task.lower()[:3] == 'sup':
-            self.model = Cifar10Fast()
+            self.model = Cifar10Fast(pdrop=self.hparams.drop)
             self.dataset, self.hparams.task = 'cifar10', 'sup'
             self.loss_fn = lambda x, y, out: F.cross_entropy(out, y)
             input_size = (3, 32, 32)
@@ -116,7 +116,7 @@ class LitWrapper(pl.LightningModule):
     def get_dataset(self, data_dir):
         if self.hparams.dataset.lower() == 'mnist':
             trans = torchvision.transforms.ToTensor()
-            train = torchvision.datasets.MNIST(data_dir / 'mnist', train=True, transform=trans, download=True)
+            train = torchvision.datasets.MNIST(data_dir / 'mnist', train=True, transform=trans)
             test = torchvision.datasets.MNIST(data_dir / 'mnist', train=False, transform=trans)
         elif self.hparams.dataset.lower() == 'cifar10':
             train_trans = torchvision.transforms.Compose([
@@ -124,7 +124,7 @@ class LitWrapper(pl.LightningModule):
                 torchvision.transforms.RandomHorizontalFlip()
             ])
             trans = torchvision.transforms.ToTensor()
-            train = torchvision.datasets.CIFAR10(data_dir / 'cifar10', train=True, transform=train_trans, download=True)
+            train = torchvision.datasets.CIFAR10(data_dir / 'cifar10', train=True, transform=train_trans)
             test = torchvision.datasets.CIFAR10(data_dir / 'cifar10', train=False, transform=trans)
         else:
             raise ValueError(f"Unrecognized dataset {self.hparams.dataset}")
