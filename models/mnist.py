@@ -12,21 +12,24 @@ class MnistSupervised(nn.Module):
 
     DATASET = 'mnist'
     TASK = 'supervised'
-    HIDDEN_DIMS = (64, 64)
 
-    def __init__(self, pdrop=0.0):
+    def __init__(self, pdrop=0.0, channels=(64, 64)):
         super().__init__()
         self.pdrop = pdrop
 
-        self.fc1 = nn.Linear(INPUT_DIM, MnistSupervised.HIDDEN_DIMS[0])
-        self.fc2 = nn.Linear(MnistSupervised.HIDDEN_DIMS[0], MnistSupervised.HIDDEN_DIMS[1])
-        self.fc3 = nn.Linear(MnistSupervised.HIDDEN_DIMS[1], CLASSES)
-
-        self.layers = [self.fc1, self.fc2, self.fc3]
+        self.fc_layers = nn.ModuleList()
+        self.fc_layers.append(nn.Linear(INPUT_DIM, channels[0]))
+        for d1, d2 in zip(channels[:-1], channels[1:]):
+            self.fc_layers.append(nn.Linear(d1, d2))
+        self.proj = nn.Linear(channels[-1], CLASSES)
 
     def forward(self, x):
+        # Flatten
         x = x.view(x.size(0), -1)
-        h0 = F.dropout(F.relu(self.fc1(x)), p=self.pdrop, training=self.training)
-        h1 = F.dropout(F.relu(self.fc2(h0)), p=self.pdrop, training=self.training)
-        return [h0, h1], self.fc3(h1)
+        # Apply layers in order
+        hidden = []
+        for lay in self.fc_layers:
+            x = F.dropout(F.relu(lay(x)), p=self.pdrop, training=self.training)
+            hidden.append(x)
+        return hidden, self.proj(x)
 
