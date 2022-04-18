@@ -33,6 +33,7 @@ DATASETS=(cifar10)
 TASKS=(sup)
 L2VALS=(0.00001 0.0001 0.001 0.01 0.1)
 L1VALS=(0.00001 0.0001 0.001 0.01)
+DROPVALS=(0.1 0.2 0.3 0.4 0.5)
 RUNS=({0..2})
 
 parallel --linebuffer --tag --jobs=$JOBS $PYTHON -m train --dataset={1} --task={2} --save-dir=logs-{1}-{2}-l2 --device=auto --devices=$CUDA_DEVICES --l2={3} --run={4} \
@@ -40,3 +41,6 @@ parallel --linebuffer --tag --jobs=$JOBS $PYTHON -m train --dataset={1} --task={
 
 parallel --linebuffer --tag --jobs=$JOBS $PYTHON -m train --dataset={1} --task={2} --save-dir=logs-{1}-{2}-l1 --device=auto --devices=$CUDA_DEVICES --l1={3} --run={4} \
   ::: ${DATASETS[@]} ::: ${TASKS[@]} ::: ${L1VALS[@]} ::: ${RUNS[@]}
+
+parallel --linebuffer --tag --jobs=$JOBS $PYTHON -m train --dataset={1} --task={2} --save-dir=logs-{1}-{2}-drop --device=auto --devices=$CUDA_DEVICES --drop={3} --run={4} \
+  ::: ${DATASETS[@]} ::: ${TASKS[@]} ::: ${DROPVALS[@]} ::: ${RUNS[@]}
