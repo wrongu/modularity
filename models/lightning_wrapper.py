@@ -102,7 +102,7 @@ class LitWrapper(pl.LightningModule):
         return sum(self.l2_norm_by_layer())
 
     def nuc_norm_by_layer(self):
-        return [torch.norm(p, p="nuc") for p in self.model.parameters() if p.ndim >= 2]
+        return [torch.norm(p, p="nuc") for p in self.model.parameters() if p.ndim == 2]
 
     def nuc_norm(self):
         return sum(self.nuc_norm_by_layer())
