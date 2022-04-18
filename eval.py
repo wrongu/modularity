@@ -19,14 +19,15 @@ __ALIGN_VERSION = 6
 def loss(mdl, dataset, task, device='cpu'):
     mdl.eval()
     loss = 0.0
-    loader = DataLoader(dataset, batch_size=500)
-    for im, la in tqdm(loader, desc='Loss', total=len(dataset)//500, leave=False):
-        im, la = im.to(device), la.to(device)
-        _, out = mdl(im)
-        if task[:3] == 'sup':
-            loss += F.cross_entropy(out, la, reduction='sum')
-        elif task[:5] == 'unsup':
-            loss += F.mse_loss(out, im.view(im.size(0), -1), reduction='sum')
+    loader = DataLoader(dataset, pin_memory=True, batch_size=100)
+    with torch.no_grad():
+        for im, la in tqdm(loader, desc='Loss', total=len(dataset)//100, leave=False):
+            im, la = im.to(device), la.to(device)
+            _, out = mdl(im)
+            if task[:3] == 'sup':
+                loss += F.cross_entropy(out, la, reduction='sum')
+            elif task[:5] == 'unsup':
+                loss += F.mse_loss(out, im.view(im.size(0), -1), reduction='sum')
     return loss.item() / len(dataset)
 
 
@@ -35,48 +36,57 @@ def accuracy(mdl, dataset, task, topk=1, device='cpu'):
     if task[:5] == 'unsup':
         return torch.tensor(float('nan'))
     acc = 0.0
-    loader = DataLoader(dataset, batch_size=500)
-    for im, la in tqdm(loader, desc='Accuracy', total=len(dataset)//500, leave=False):
-        im, la = im.to(device), la.to(device)
-        _, pred = mdl(im)
-        ipred = torch.argsort(pred, dim=1, descending=True)[:, :topk]
-        acc += torch.sum((ipred == la.view(-1,1)).float())
+    loader = DataLoader(dataset, pin_memory=True, batch_size=100)
+    with torch.no_grad():
+        for im, la in tqdm(loader, desc='Accuracy', total=len(dataset)//100, leave=False):
+            im, la = im.to(device), la.to(device)
+            _, pred = mdl(im)
+            ipred = torch.argsort(pred, dim=1, descending=True)[:, :topk]
+            acc += torch.sum((ipred == la.view(-1,1)).float())
     return acc.item() / len(dataset)
 
 
-def evaluate(checkpoint_file, data_dir, metrics=None):
+def evaluate(checkpoint_file, data_dir, metrics=None, device='cpu'):
     info = torch.load(checkpoint_file)
     model = LitWrapper.load_from_checkpoint(checkpoint_file)
+    model.to(device)  # TODO - why didn't load_from_checkpoint(map_location=device) work?
     data_train, data_val, data_test = model.get_dataset(data_dir)
 
     if metrics is None:
-        metrics = ['train_loss', 'train_acc', 'val_loss', 'val_acc', 'test_loss', 'test_acc', 'l1_norm', 'l2_norm', 'sparsity', 'nuc_norm']
+        metrics = ['train_loss',
+                   'train_acc',
+                   'val_loss',
+                   'val_acc',
+                   'test_loss',
+                   'test_acc',
+                   'l1_norm',
+                   'l2_norm',
+                   'sparsity',
+                   'nuc_norm']
 
     # Loss and accuracy metrics
     if 'train_loss' not in info and 'train_loss' in metrics:
-        info['train_loss'] = loss(model, data_train, model.hparams.task)
+        info['train_loss'] = loss(model, data_train, model.hparams.task, device=device)
     if 'train_acc' not in info and 'train_acc' in metrics:
-        info['train_acc'] = accuracy(model, data_train, model.hparams.task)
+        info['train_acc'] = accuracy(model, data_train, model.hparams.task, device=device)
     if 'val_loss' not in info and 'val_loss' in metrics:
-        info['val_loss'] = loss(model, data_val, model.hparams.task)
+        info['val_loss'] = loss(model, data_val, model.hparams.task, device=device)
     if 'val_acc' not in info and 'val_acc' in metrics:
-        info['val_acc'] = accuracy(model, data_val, model.hparams.task)
+        info['val_acc'] = accuracy(model, data_val, model.hparams.task, device=device)
     if 'test_loss' not in info and 'test_loss' in metrics:
-        info['test_loss'] = loss(model, data_test, model.hparams.task)
+        info['test_loss'] = loss(model, data_test, model.hparams.task, device=device)
     if 'test_acc' not in info and 'test_acc' in metrics:
-        info['test_acc'] = accuracy(model, data_test, model.hparams.task)
-    if 'test_acc' not in info and 'test_acc' in metrics:
-        info['test_acc'] = accuracy(model, data_test, model.hparams.task)
+        info['test_acc'] = accuracy(model, data_test, model.hparams.task, device=device)
 
     # Weight norms, using LitWrapper.l2_norm and LitWrapper.l1_norm
     if 'l2_norm' not in info and 'l2_norm' in metrics:
-        info['l2_norm'] = model.l2_norm().detach()
+        info['l2_norm'] = model.l2_norm().item()
     if 'l1_norm' not in info and 'l1_norm' in metrics:
-        info['l1_norm'] = model.l1_norm().detach()
-    if 'sparsity' in metrics:
-        info['sparsity'] = model.sparsity().detach()
-    if 'nuc_norm' in metrics:
-        info['nuc_norm'] = model.nuc_norm().detach()
+        info['l1_norm'] = model.l1_norm().item()
+    if 'sparsity' not in info and 'sparsity' in metrics:
+        info['sparsity'] = model.sparsity().item()
+    if 'nuc_norm' not in info and 'nuc_norm' in metrics:
+        info['nuc_norm'] = model.nuc_norm().item()
 
     torch.save(info, checkpoint_file)
     return info
@@ -84,7 +94,7 @@ def evaluate(checkpoint_file, data_dir, metrics=None):
 
 def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=5000, metrics=None, sparseness=None, align=True, combined=False, device='cpu'):
     info = torch.load(checkpoint_file)
-    model = LitWrapper.load_from_checkpoint(checkpoint_file)
+    model = LitWrapper.load_from_checkpoint(checkpoint_file, map_location=device)
     # TODO - include a dataset that's just noise as a kind of reference/null
     _, _, data_test = model.get_dataset(data_dir)
 
@@ -250,29 +260,36 @@ if __name__ == '__main__':
     parser.add_argument('--ckpt-file', metavar='CKPT', type=Path, required=True)
     parser.add_argument('--data-dir', default=Path('data'), metavar='DATA', type=Path)
     parser.add_argument('--device', default='cpu')
-    parser.add_argument('--metrics', default='train_acc,val_acc,test_acc,l1_norm,l2_norm,sparsity,nuc_norm')
+    parser.add_argument('--metrics', default='')
     parser.add_argument('--target-entropy', default=None)
+    parser.add_argument('--skip-modularity', action='store_true', default=False)
     parser.add_argument('--modularity-metrics', default='')
     parser.add_argument('--modularity-combined', action='store_true')
     parser.add_argument('--modularity-sparseness', default='')
     parser.add_argument('--skip-alignment', action='store_true', default=False)
     args = parser.parse_args()
 
-    eval_metrics = args.metrics.split(",") if args.metrics != '' else []
-    mod_metrics = args.modularity_metrics.split(",") if args.modularity_metrics != '' else []
+    eval_metrics = args.metrics.split(",") if args.metrics != '' else None
+    mod_metrics = args.modularity_metrics.split(",") if args.modularity_metrics != '' else None
     # Sparseness is either a list of floats, parsed from comma-separated inputs, or None
     sparseness = [float(s) for s in args.modularity_sparseness.split(",")] if args.modularity_sparseness != '' else None
 
-    pprint(eval_metrics)
-    pprint(mod_metrics)
+    # pprint(eval_metrics)
+    # pprint(mod_metrics)
 
-    evaluate(args.ckpt_file, args.data_dir, eval_metrics)
-    eval_modularity(args.ckpt_file, args.data_dir,
-                    metrics=mod_metrics,
-                    device=args.device,
-                    target_entropy=args.target_entropy,
-                    sparseness=sparseness,
-                    combined=args.modularity_combined,
-                    align=not args.skip_alignment)
-    info = torch.load(args.ckpt_file)
-    pprint({k: info[k] for k in eval_metrics if k in info})
+    evaluate(args.ckpt_file, args.data_dir,
+             metrics=eval_metrics,
+             device=args.device)
+
+    if not args.skip_modularity:
+        eval_modularity(args.ckpt_file, args.data_dir,
+                        metrics=mod_metrics,
+                        device=args.device,
+                        target_entropy=args.target_entropy,
+                        sparseness=sparseness,
+                        combined=args.modularity_combined,
+                        align=not args.skip_alignment)
+
+    if eval_metrics is not None:
+        info = torch.load(args.ckpt_file)
+        pprint({k: info[k] for k in eval_metrics if k in info})

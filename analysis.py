@@ -1,24 +1,30 @@
+import pandas as pd
 import torch
 from pathlib import Path
 from models import LitWrapper
 from itertools import product
 from util import merge_dicts
 from pandas import DataFrame
+from typing import Union, Iterable
 
 
-def last_model(model_dir):
+def last_model(model_dir: Path) -> Path:
     return model_dir / 'weights' / 'last.ckpt'
 
 
-def best_model(model_dir):
-    data = torch.load(last_model(model_dir))
-    for v in data['callbacks'].values():
-        if 'best_model_path' in v:
-            return v['best_model_path']
-    return None
+def best_model(model_dir: Path) -> Union[Path, None]:
+    best_alias = model_dir / 'weights' / 'best.ckpt'
+    if best_alias.exists():
+        return best_alias
+    else:
+        data = torch.load(last_model(model_dir))
+        for v in data['callbacks'].values():
+            if 'best_model_path' in v:
+                return v['best_model_path']
+        return None
 
 
-def gather_metrics(ckpt_file, metrics):
+def gather_metrics(ckpt_file: Path, metrics: Iterable[str]) -> Iterable[dict]:
     info = torch.load(ckpt_file, map_location='cpu')
     keyed_rows = {}
 
@@ -123,11 +129,11 @@ def get_model_checkpoint(spec, log_dir=Path('logs/')):
 
 
 def load_data_as_table(model_specs, metrics, log_dir=Path('logs/')):
-    tbl = DataFrame()
+    rows = []
     for spec in model_specs:
         new_rows = gather_metrics(get_model_checkpoint(spec, log_dir), metrics)
-        tbl = tbl.append(DataFrame([merge_dicts(spec, r) for r in new_rows]))
-    return tbl
+        rows.extend([merge_dicts(spec, r) for r in new_rows])
+    return DataFrame(rows)
 
 
 if __name__ == "__main__":
