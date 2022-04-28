@@ -6,6 +6,10 @@ from typing import List
 import itertools
 
 
+METHODS = ['forward_cov', 'forward_jac', 'backward_jac', 'backward_hess']
+METHODS += [m+"_norm" for m in METHODS]
+
+
 def corrcov(covariance, eps=1e-12):
     sigma = covariance.diag().sqrt()
     sigma[sigma < eps] = eps
@@ -40,9 +44,9 @@ def sum_hessian(loss, hidden_layers: List[torch.Tensor]):
     return hessian
 
 
-def sum_hessian_conv_avg_over_space(loss, conv_feature_planes: torch.Tensor):
-    """Given scalar tensor 'loss' and (b,c,h,w) batch of feature planes, computes (c,c)-size
-     sum of hessians, summed over the batch dimension and averaged over spatial dimensions.
+def sum_hessian_conv(loss, conv_feature_planes: torch.Tensor, n_subsample: Union[int, None] = None):
+    """Given scalar tensor 'loss' and (b,c,h,w) batch of feature planes, computes (c,c,h*w)-size
+     sum of hessians, summed over the batch dimension, separately for each x,y location.
 
     We make use of the fact that grad^2(f) = grad(grad(f)) and that sum of grads = grad of sum. So, sum(grad^2(f)) is
     computed as grad(sum(grad(f))), with sums taken over the batch dimension.
@@ -51,11 +55,16 @@ def sum_hessian_conv_avg_over_space(loss, conv_feature_planes: torch.Tensor):
     hessian = conv_feature_planes.new_zeros(c, c)
     grad = torch.autograd.grad(loss, conv_feature_planes, retain_graph=True, create_graph=True)[0]
     sum_grad = torch.sum(grad, dim=0)
+    all_xy = list(itertools.product(range(w), range(h)))
+    if n_subsample is not None:
+        assert n_subsample >= 1, "If n_subsample is not None, it must be an integer greater than or equal to 1"
+        subs = torch.randperm(len(all_xy))[:n_subsample]
+        all_xy = [all_xy[i] for i in subs]
     for i in range(c):
         # NOTE: this is inefficient because it computes the hessian w.r.t. all x,y,x',y' pairs of location, only for us
         # to subselect later where x==x' and y==y'. Alas, torch doesn't let us take the grad w.r.t. a subset of
         # features, since slice operations break dependency graph.
-        for x, y in tqdm(itertools.product(range(w), range(h)), total=h*w, desc=f'xy[{i}]', leave=False):
+        for x, y in tqdm(all_xy, desc=f'xy[{i}]', leave=False):
             hess_ixy = torch.autograd.grad(sum_grad[i, y, x], conv_feature_planes, retain_graph=True)[0]
             hessian[i, :] = hessian[i, :] + hess_ixy[:, :, y, x].sum(dim=0)
     return hessian
@@ -68,73 +77,166 @@ def batch_jacobian(h1, h2):
     Assuming computation graph has no dependence of h2[i,...] on h1[j,...] unless i==j. This allows us to pass a lot
     of vectorization over to torch by getting grad of h2.sum() w.r.t. h1
     """
-    b = h1.size(0)
-    h2 = h2.reshape(b, -1)
-    d1, d2 = h1.numel()//b, h2.size(1)
-    jacobians = h1.new_zeros(b, d1, d2)
-    for i in range(d2):
-        jac_part = torch.autograd.grad(h2[:, i].sum(), h1, retain_graph=True)[0]
-        jacobians[:, :, i] = jac_part.reshape(b, d1)
-    return jacobians
+    sz1, sz2 = h1.size(), h2.size()
+    if sz1[0] != sz2[0]:
+        raise ValueError(f"Incompatible batch dimensions: {sz1} and {sz2}")
+    b = sz1[0]
+    n1, n2 = h1.numel() // b, h2.numel() // b
+    h2_flat = h2.reshape(b, n2)
+    jacobians = h1.new_zeros(b, n1, n2)
+    for i in range(n2):
+        jac_part = torch.autograd.grad(h2_flat[:, i].sum(), h1, retain_graph=True)[0]
+        jacobians[:, :, i] = jac_part.reshape(b, n1)
+    return jacobians.reshape((b,) + sz1[1:] + sz2[1:])
+
+
+class BatchWiseSimilarity(object):
+    def __init__(self, hidden_size, norm, max_extra_dims=32):
+        self.n = 0
+        self.norm = norm
+        if len(hidden_size) == 1:
+            self.d, = hidden_size
+            self.extra_dims = 1
+            self.reduced_extra_dims = 1
+            self.subs_x = Ellipsis
+            self.conv = False
+        elif len(hidden_size) == 3:
+            self.d, h, w = hidden_size
+            self.extra_dims = w*h
+            self.reduced_extra_dims = min(max_extra_dims, w*h)
+            self.subs_x = torch.randperm(w*h)[:self.reduced_extra_dims]
+            self.subs_x = torch.sort(self.subs_x).values
+            self.conv = True
+        else:
+            raise ValueError(f"Not sure how to handle hidden layer size {hidden_size}")
+
+    def batch_update(self, h: torch.Tensor, **kwargs) -> None:
+        """Update running calculation of dxd unit associations given a bxd batch of hidden activity
+
+        :param h: size (b,?) batch of hidden unit activity
+        :return: None
+        """
+        raise NotImplementedError("To-be-sublcassed")
+
+    def finalize(self) -> torch.Tensor:
+        """Finalize computations after all batches have been processed, and return final d-by-d matrix of associations.
+
+        :return: size (d,d) matrix of pairwise associations
+        """
+        raise NotImplementedError("To-be-sublcassed")
+
+
+class Covariance(BatchWiseSimilarity):
+    def __init__(self, hidden_size, norm, **kwargs):
+        super().__init__(hidden_size, norm)
+        # Note: if hidden_size is (c,h,w) of a conv layer, then extra_dims=h*w and we compute covariance across channels
+        # separately for each location.
+        self.moment1 = torch.zeros(self.d, self.reduced_extra_dims, **kwargs)
+        self.moment2 = torch.zeros(self.d, self.d, self.reduced_extra_dims, **kwargs)
+
+    def batch_update(self, batch_hidden, **kwargs):
+        b = batch_hidden.size()[0]
+        self.n += b
+        batch_hidden = batch_hidden.detach().view(b, self.d, self.extra_dims)[:, :, self.subs_x]
+        self.moment1 += batch_hidden.sum(dim=0)
+        self.moment2 += torch.einsum('iax,ibx->abx', batch_hidden, batch_hidden)
+
+    def finalize(self):
+        norm_moment1 = self.moment1 / self.n
+        norm_moment2 = self.moment2 / self.n
+        moment1_outer = torch.einsum('ax,bx->abx', norm_moment1, norm_moment1)
+        cov_per_location = norm_moment2 - moment1_outer
+        cov = torch.mean(cov_per_location, dim=-1)
+        return torch.abs(corrcov(cov) if self.norm else cov)
+
+
+class UpstreamSensitivity(BatchWiseSimilarity):
+    def __init__(self, hidden_size, norm, **kwargs):
+        super().__init__(hidden_size, norm)
+        self.n = 0
+        self.inner_prod = torch.zeros(self.d, self.d, self.reduced_extra_dims, **kwargs)
+
+    def batch_update(self, batch_hidden, *, inpt=None, **kwargs):
+        b = batch_hidden.size()[0]
+        self.n += b
+        # Get jacobian of hidden activity w.r.t. changes in the input, then take inner product over input dims
+        batch_hidden = batch_hidden.view(b, self.d, self.extra_dims)[:, :, self.subs_x]
+        for i in range(self.reduced_extra_dims):
+            jac_i = batch_jacobian(inpt, batch_hidden[:, :, i]).detach()
+            self.inner_prod[:, :, i] += torch.einsum('...i,...j->ij', jac_i, jac_i)
+
+    def finalize(self):
+        sim = self.inner_prod.mean(dim=-1) / self.n
+        return torch.abs(corrcov(sim) if self.norm else sim)
+
+
+class DownstreamSensitivity(BatchWiseSimilarity):
+    def __init__(self, hidden_size, norm, **kwargs):
+        super().__init__(hidden_size, norm)
+        self.n = 0
+        self.inner_prod = torch.zeros(self.d, self.d, self.extra_dims, **kwargs)
+
+    def batch_update(self, batch_hidden, *, outpt=None, **kwargs):
+        b = batch_hidden.size()[0]
+        self.n += b
+        # Get jacobian of hidden activity w.r.t. changes in the input, then take inner product over input dims
+        jac_all = batch_jacobian(batch_hidden, outpt).detach()
+        jac_all = jac_all.view(b, self.d, self.extra_dims, outpt.numel())
+        self.inner_prod += torch.einsum('bixo,bjxo->ijx', jac_all, jac_all)
+
+    def finalize(self):
+        sim = self.inner_prod.mean(dim=-1) / self.n
+        return torch.abs(corrcov(sim) if self.norm else sim)
+
+
+class LossHessian(BatchWiseSimilarity):
+    def __init__(self, hidden_size, norm, **kwargs):
+        super().__init__(hidden_size, norm)
+        self.n = 0
+        self.hess = torch.zeros(self.d, self.d, self.extra_dims, **kwargs)
+
+    def batch_update(self, batch_hidden, *, loss=None, **kwargs):
+        b = batch_hidden.size()[0]
+        self.n += b
+        if not self.conv:
+            self.hess = self.hess + sum_hessian(loss, [batch_hidden]).unsqueeze(-1).detach()
+        else:
+            self.hess = self.hess + sum_hessian_conv(loss, batch_hidden).detach()
+
+    def finalize(self):
+        # enforce symmetry here in case of numerical imprecision
+        sym_hess = (self.hess.mean(dim=-1) + self.hess.mean(dim=-1).T) / 2 / self.n
+        return torch.abs(corrcov(sym_hess) if self.norm else sym_hess)
+
 
 
 def get_similarity_by_layer(model, method, dataset, device='cpu', batch_size=200, shuffle=True):
     model.eval()
     model.to(device)
+    norm = method.endswith('_norm')
 
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, pin_memory=True)
-    num_batches = ceil(len(dataset)/batch_size)
 
     if method in ['forward_cov', 'forward_cov_norm']:
-        moment1 = [torch.zeros(d, device=device) for d in model.hidden_dims]
-        moment2 = [torch.zeros(d, d, device=device) for d in model.hidden_dims]
-        for im, _ in tqdm(loader, desc=method, total=num_batches):
-            hidden, _ = model(im.to(device))
-
-            for h, m1, m2 in zip(hidden, moment1, moment2):
-                m1 += h.sum(dim=0) / len(dataset)
-                m2 += h.T @ h / len(dataset)
-
-        # Convert from moment1 and moment2 to covariance for each hidden layer
-        assoc = [m2 - m1.view(-1, 1) * m1.view(1, -1) for m1, m2 in zip(moment1, moment2)]
-
+        sim_per_layer = [Covariance(sz, norm, device=device) for sz in model.hidden_dims]
     elif method in ['backward_hess', 'backward_hess_norm']:
-        assoc = [torch.zeros(d, d, device=device) for d in model.hidden_dims]
-        for im, la in tqdm(loader, desc=method, total=num_batches):
-            im, la = im.to(device), la.to(device)
-            hidden, out = model(im)
-            loss = model.loss_fn(im, la, out)
-            for a, h in zip(assoc, hidden):
-                a += sum_hessian(loss, h) / len(dataset)
-        # Ensure symmetry, since hessians will not be *exactly* symmetric up to floating point errors, and we will
-        # be asserting symmetry later.
-        assoc = [(a + a.T)/2. for a in assoc]
+        sim_per_layer = [LossHessian(sz, norm, device=device) for sz in model.hidden_dims]
     elif method in ['forward_jac', 'forward_jac_norm']:
-        assoc = [torch.zeros(d, d, device=device) for d in model.hidden_dims]
-        for im, la in tqdm(loader, desc=method, total=num_batches):
-            im, la = im.to(device), la.to(device)
-            im.requires_grad_(True)
-            hidden, out = model(im)
-            for a, h in zip(assoc, hidden):
-                jac = batch_jacobian(im, h)
-                a += torch.einsum('bix,biy->xy', jac, jac) / len(dataset)
+        sim_per_layer = [UpstreamSensitivity(sz, norm, device=device) for sz in model.hidden_dims]
     elif method in ['backward_jac', 'backward_jac_norm']:
-        assoc = [torch.zeros(d, d, device=device) for d in model.hidden_dims]
-        for im, la in tqdm(loader, desc=method, total=num_batches):
-            im, la = im.to(device), la.to(device)
-            hidden, out = model(im)
-            for a, h in zip(assoc, hidden):
-                jac = batch_jacobian(h, out)
-                a += torch.einsum('bxi,byi->xy', jac, jac) / len(dataset)
+        sim_per_layer = [DownstreamSensitivity(sz, norm, device=device) for sz in model.hidden_dims]
     else:
-        allowed_methods = ['forward_cov', 'forward_cov_norm', 'backward_hess', 'backward_hess_norm',
-                           'forward_jac', 'forward_jac_norm', 'backward_jac', 'backward_jac_norm']
-        raise ValueError(f"get_similarity_combined requires method to be one of {allowed_methods}")
+        raise ValueError(f"get_similarity_combined requires method to be one of {METHODS}")
 
-    if 'norm' in method:
-        assoc = [corrcov(a) for a in assoc]
+    for im, la in tqdm(loader, total=len(loader), desc=method, leave=False):
+        im.requires_grad_(True)
+        im, la = im.to(device), la.to(device)
+        hidden, out = model(im)
+        kwargs = {'inpt': im, 'outpt': out, 'loss': model.loss_fn(im, la, out)}
+        for h, sim in zip(hidden, sim_per_layer):
+            sim.batch_update(h, **kwargs)
 
-    return [a.detach().abs() for a in assoc]
+    return [sim.finalize().detach().cpu() for sim in sim_per_layer]
 
 
 def get_similarity_combined(model, method, dataset, device='cpu', batch_size=200, shuffle=True):
