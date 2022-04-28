@@ -27,18 +27,18 @@ class LitWrapper(pl.LightningModule):
         # Copy all kwargs fields into instance variables and log them into self.hparams
         self.save_hyperparameters(kwargs)
 
-    def init_model(self, set_seed=True):
+    def init_model(self, set_seed=True, **extra_model_args):
         if set_seed:
             pl.seed_everything(self.hparams.seed)
 
         # Select among architectures based on the given dataset, task, etc
         if self.hparams.dataset.lower() == 'mnist' and self.hparams.task.lower()[:3] == 'sup':
-            self.model = MnistSupervised(pdrop=self.hparams.drop)
+            self.model = MnistSupervised(pdrop=self.hparams.drop, **extra_model_args)
             self.dataset, self.hparams.task = 'mnist', 'sup'
             self.loss_fn = lambda x, y, out: F.cross_entropy(out, y)
             input_size = (1, 28, 28)
         elif self.hparams.dataset.lower() == 'cifar10' and self.hparams.task.lower()[:3] == 'sup':
-            self.model = Cifar10Fast(pdrop=self.hparams.drop)
+            self.model = Cifar10Fast(pdrop=self.hparams.drop, **extra_model_args)
             self.dataset, self.hparams.task = 'cifar10', 'sup'
             self.loss_fn = lambda x, y, out: F.cross_entropy(out, y)
             input_size = (3, 32, 32)

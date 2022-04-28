@@ -24,11 +24,20 @@ if __name__ == '__main__':
     parser.add_argument('--run', default=0, type=int)
     parser.add_argument('--max-epochs', default=500, type=int)
     parser.add_argument('--seed', default=None)
+    parser.add_argument('--model-args', default=None, type=str)
     # Environment config
     parser.add_argument('--save-dir', metavar='DIR', required=True, type=Path)
     parser.add_argument('--data-dir', default='data', type=Path)
     parser.add_argument('--batch-size', default=200, type=int)
     args = parser.parse_args()
+
+    if args.model_args is not None:
+        try:
+            args.model_args = eval(args.model_args)
+        except:
+            raise ValueError(f"Failed to parse extra args for the model: {args.model_args}")
+    else:
+        args.model_args = {}
 
     # Create Pytorch-Lightning wrapper object, which contains logic for managing hyperparameters, datasets, models, etc
     pl_model = LitWrapper(**vars(args))
@@ -68,7 +77,7 @@ if __name__ == '__main__':
 
     # Actually initialize the NN to be trained. Note: this makes use of pl_model.hparams.seed, which by default changes
     # depending on args.run but constant for all other parameters
-    pl_model.init_model(set_seed=True)
+    pl_model.init_model(set_seed=True, **args.model_args)
 
     trainer = pl.Trainer(logger=tblogger, callbacks=callbacks, deterministic=True,
                          default_root_dir=args.save_dir, gpus=the_gpu, auto_select_gpus=False,
