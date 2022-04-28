@@ -4,7 +4,7 @@ from models import LitWrapper
 from associations import get_similarity_by_layer, get_similarity_combined
 from associations import METHODS as association_methods
 from modularity import monte_carlo_modularity, girvan_newman, soft_num_clusters, is_valid_adjacency_matrix, \
-    alignment_score, shuffled_alignment_score, sparsify, cluster_id
+    alignment_score, shuffled_alignment_score, cluster_id
 from torch.utils.data import DataLoader
 from scipy.stats import spearmanr
 from clusim.clustering import Clustering
@@ -109,18 +109,13 @@ def evaluate(checkpoint_file, data_dir, metrics=None, device='cpu'):
     return info
 
 
-def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=5000, metrics=None, sparseness=None, align=True, combined=False, device='cpu'):
+def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=5000, metrics=None, align=True, combined=False, device='cpu'):
     info = torch.load(checkpoint_file)
 
     # Use defaults unless target_entropy is given
     mc_kwargs = {'device': device}
     if target_entropy is not None:
         mc_kwargs['target_entropy'] = target_entropy
-
-    if sparseness is None:
-        sparseness = [None]
-    else:
-        sparseness = [None] + list(sparseness)
 
     if metrics is None:
         metrics = association_methods
@@ -137,81 +132,71 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
             if not all(is_valid_adjacency_matrix(m, enforce_sym=True) for m in assoc_info[meth]):
                 warn(f"First sanity check on association method {meth} failed!")
 
-        if combined:
+        combo_key = meth + '_combined'
+        if combined and combo_key not in assoc_info:
             # ...now do it with all hidden layers stacked. Each of assoc_info[combo_key] will be a list containing a single
             # similarity matrix. We nonetheless wrap it in a list for compatibility with the per-layer methods.
-            combo_key = meth + '_combined'
-            if combo_key not in assoc_info:
-                # compute combined association info
-                model, _, _, data_test = load_model_once(checkpoint_file, data_dir, device)
-                assoc_info[combo_key] = [get_similarity_combined(model, meth, data_test, device=device)]
-                if not is_valid_adjacency_matrix(assoc_info[combo_key][0], enforce_sym=True):
-                    warn(f"First sanity check on association method {combo_key} failed!")
+            model, _, _, data_test = load_model_once(checkpoint_file, data_dir, device)
+            assoc_info[combo_key] = [get_similarity_combined(model, meth, data_test, device=device)]
+            if not is_valid_adjacency_matrix(assoc_info[combo_key][0], enforce_sym=True):
+                warn(f"First sanity check on association method {combo_key} failed!")
 
     info['assoc'] = assoc_info
 
+    suffixes = ['', '_combined'] if combined else ['']
     # For each requested method, compute and store (1) cluster assignments and (2) modularity score
     module_info = info.get('modules', {})
-    for imeth in range(len(metrics)):
-        suffixes = ['', '_combined'] if combined else ['']
+    for meth in metrics:
         for suffix in suffixes:
-            meth = metrics[imeth] + suffix
-            for sp in sparseness:
-                key = meth if sp is None else f"{meth}.{sp:.2f}"
-                if key not in module_info or module_info[key] == [] or module_info[key][0].get('version', 0) < __MOD_VERSION:
-                    module_info[key] = []
-                    for adj in info['assoc'][meth]:
-                        adj = adj - adj.diag().diag()
-                        if not is_valid_adjacency_matrix(adj, enforce_sym=True, enforce_no_self=True):
-                            warn(f"Second sanity check on association method {meth} failed!")
-                            module_info[key].append({
-                                'adj': adj.cpu(),
-                                'sparse': sp,
-                                'clusters': float('nan')*torch.ones(adj.size()),
-                                'score': float('nan'),
-                                'mc_scores': float('nan')*torch.ones(mc_steps),
-                                'num_clusters': float('nan'),
-                                'mc_temperatures': float('nan')*torch.ones(mc_steps),
-                                'mc_entropies': float('nan')*torch.ones(mc_steps),
-                                'version': __MOD_VERSION
-                            })
-                            continue
-
-                        if sp is not None:
-                            adj = sparsify(adj, sp)
-
-                        print(f"Running modules.{key} on {device}")
-                        try:
-                            clusters, mc_scores, mc_temps, mc_ents = monte_carlo_modularity(adj, steps=mc_steps, **mc_kwargs)
-                        except RuntimeError:
-                            print(f"Error in modules.{key}... storing NaN values")
-                            module_info[key].append({
-                                'adj': adj.cpu(),
-                                'sparse': sp,
-                                'clusters': float('nan')*torch.ones(adj.size()),
-                                'score': float('nan'),
-                                'mc_scores': float('nan')*torch.ones(mc_steps),
-                                'num_clusters': float('nan'),
-                                'mc_temperatures': float('nan')*torch.ones(mc_steps),
-                                'mc_entropies': float('nan')*torch.ones(mc_steps),
-                                'version': __MOD_VERSION
-                            })
-                            continue
-
-
+            key = meth + suffix
+            if key not in module_info or module_info[key] == [] or module_info[key][0].get('version', 0) < __MOD_VERSION:
+                module_info[key] = []
+                for adj in info['assoc'][meth]:
+                    adj = adj - adj.diag().diag()
+                    if not is_valid_adjacency_matrix(adj, enforce_sym=True, enforce_no_self=True):
+                        warn(f"Second sanity check on association method {meth} failed!")
                         module_info[key].append({
                             'adj': adj.cpu(),
-                            'sparse': sp,
-                            'clusters': clusters.cpu(),
-                            'score': girvan_newman(adj.cpu(), clusters.cpu()),
-                            'mc_scores': mc_scores.cpu(),
-                            'num_clusters': soft_num_clusters(clusters.cpu()),
-                            'mc_temperatures': mc_temps.cpu(),
-                            'mc_entropies': mc_ents.cpu(),
+                            'clusters': float('nan')*torch.ones(adj.size()),
+                            'score': float('nan'),
+                            'mc_scores': float('nan')*torch.ones(mc_steps),
+                            'num_clusters': float('nan'),
+                            'mc_temperatures': float('nan')*torch.ones(mc_steps),
+                            'mc_entropies': float('nan')*torch.ones(mc_steps),
                             'version': __MOD_VERSION
                         })
-                else:
-                    print(f"Skipping modules.{key} -- already done!")
+                        continue
+
+                    print(f"Running modules.{key} on {device}")
+                    try:
+                        clusters, mc_scores, mc_temps, mc_ents = monte_carlo_modularity(adj, steps=mc_steps, **mc_kwargs)
+                    except RuntimeError:
+                        print(f"Error in modules.{key}... storing NaN values")
+                        module_info[key].append({
+                            'adj': adj.cpu(),
+                            'clusters': float('nan')*torch.ones(adj.size()),
+                            'score': float('nan'),
+                            'mc_scores': float('nan')*torch.ones(mc_steps),
+                            'num_clusters': float('nan'),
+                            'mc_temperatures': float('nan')*torch.ones(mc_steps),
+                            'mc_entropies': float('nan')*torch.ones(mc_steps),
+                            'version': __MOD_VERSION
+                        })
+                        continue
+
+
+                    module_info[key].append({
+                        'adj': adj.cpu(),
+                        'clusters': clusters.cpu(),
+                        'score': girvan_newman(adj.cpu(), clusters.cpu()),
+                        'mc_scores': mc_scores.cpu(),
+                        'num_clusters': soft_num_clusters(clusters.cpu()),
+                        'mc_temperatures': mc_temps.cpu(),
+                        'mc_entropies': mc_ents.cpu(),
+                        'version': __MOD_VERSION
+                    })
+            else:
+                print(f"Skipping modules.{key} -- already done!")
     info['modules'] = module_info
 
     # Compute module alignments
@@ -221,46 +206,40 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
             for j in range(i, len(metrics)):
                 for suffix in ['', '_combined']:
                     meth1, meth2 = metrics[i] + suffix, metrics[j] + suffix
-                    for sp in sparseness:
-                        # Sort methods so key is always in alphabetical order <method a>:<method b>
-                        meth_a, meth_b = min([meth1, meth2]), max([meth1, meth2])
-                        key = meth_a + ":" + meth_b
-                        if sp is not None:
-                            key = key + f".{sp:.2f}"
-                            meth_a = meth_a + f".{sp:.2f}"
-                            meth_b = meth_b + f".{sp:.2f}"
-                        if key not in alignment_info or alignment_info[key] == [] or alignment_info[key][0].get('version', 0) < __ALIGN_VERSION:
-                            # Create or re-load a dictionary of alignment stats per layer. In the subsequent loop,
-                            # writing values to 'this_align_info' modifies everything in place.
-                            num_layers = len(info['modules'][meth_a])
-                            alignment_info[key] = alignment_info.get(key, [{} for _ in range(num_layers)])
-                            # Loop over network layers
-                            for info_a, info_b, this_align_info in zip(info['modules'][meth_a], info['modules'][meth_b], alignment_info[key]):
-                                adj_a, adj_b = info_a['adj'], info_b['adj']
-                                c1, c2 = info_a['clusters'].to(device), info_b['clusters'].to(device)
-                                if 'adj_spearman_r' not in this_align_info:
-                                    triu_ij = torch.triu_indices(*adj_a.size(), offset=1)
-                                    this_align_info['adj_spearman_r'], this_align_info['adj_spearman_p'] = \
-                                        spearmanr(adj_a[triu_ij[0], triu_ij[1]], adj_b[triu_ij[0], triu_ij[1]])
-                                if 'score' not in this_align_info:
-                                    this_align_info['score'] = alignment_score(c1, c2).cpu()
-                                if 'null' not in this_align_info:
-                                    shuffle_scores = shuffled_alignment_score(c1, c2, n_shuffle=5000).cpu()
-                                    this_align_info['null'] = shuffle_scores
-                                    this_align_info['p'] = (shuffle_scores > this_align_info['score']).float().mean()
-                                if 'rmi' not in this_align_info:
-                                    clu_c1 = Clustering(elm2clu_dict={i:[c.item()] for i, c in enumerate(cluster_id(c1.detach()))})
-                                    clu_c2 = Clustering(elm2clu_dict={i:[c.item()] for i, c in enumerate(cluster_id(c2.detach()))})
-                                    this_align_info['rmi'] = sim.rmi(clu_c1, clu_c2),  # Reduced Mutual Information from clusim package
-                                    this_align_info['vi'] = sim.vi(clu_c1, clu_c2),  # Variation in Information from clusim (lower=more similar)
-                                    this_align_info['rmi_norm'] = sim.rmi(clu_c1, clu_c2, 'normalized'),  # Reduced Mutual Information from clusim package
-                                    this_align_info['vi_norm'] = sim.vi(clu_c1, clu_c2, 'entropy'),  # Variation in Information from clusim (lower=more similar)
-                                    this_align_info['element_sim'] = sim.element_sim(clu_c1, clu_c2),  # Element-centric similarity from clusim
-                                if 'transfer_AaPb' not in this_align_info:
-                                    this_align_info['transfer_AaPb'] = girvan_newman(info_a['adj'], info_b['clusters'])
-                                    this_align_info['transfer_AbPa'] = girvan_newman(info_b['adj'], info_a['clusters'])
-                                this_align_info['sparse'] = sp
-                                this_align_info['version'] = __ALIGN_VERSION
+                    # Sort methods so key is always in alphabetical order <method a>:<method b>
+                    meth_a, meth_b = min([meth1, meth2]), max([meth1, meth2])
+                    key = meth_a + ":" + meth_b
+                    if key not in alignment_info or alignment_info[key] == [] or alignment_info[key][0].get('version', 0) < __ALIGN_VERSION:
+                        # Create or re-load a dictionary of alignment stats per layer. In the subsequent loop,
+                        # writing values to 'this_align_info' modifies everything in place.
+                        num_layers = len(info['modules'][meth_a])
+                        alignment_info[key] = alignment_info.get(key, [{} for _ in range(num_layers)])
+                        # Loop over network layers
+                        for info_a, info_b, this_align_info in zip(info['modules'][meth_a], info['modules'][meth_b], alignment_info[key]):
+                            adj_a, adj_b = info_a['adj'], info_b['adj']
+                            c1, c2 = info_a['clusters'].to(device), info_b['clusters'].to(device)
+                            if 'adj_spearman_r' not in this_align_info:
+                                triu_ij = torch.triu_indices(*adj_a.size(), offset=1)
+                                this_align_info['adj_spearman_r'], this_align_info['adj_spearman_p'] = \
+                                    spearmanr(adj_a[triu_ij[0], triu_ij[1]], adj_b[triu_ij[0], triu_ij[1]])
+                            if 'score' not in this_align_info:
+                                this_align_info['score'] = alignment_score(c1, c2).cpu()
+                            if 'null' not in this_align_info:
+                                shuffle_scores = shuffled_alignment_score(c1, c2, n_shuffle=5000).cpu()
+                                this_align_info['null'] = shuffle_scores
+                                this_align_info['p'] = (shuffle_scores > this_align_info['score']).float().mean()
+                            if 'rmi' not in this_align_info:
+                                clu_c1 = Clustering(elm2clu_dict={i:[c.item()] for i, c in enumerate(cluster_id(c1.detach()))})
+                                clu_c2 = Clustering(elm2clu_dict={i:[c.item()] for i, c in enumerate(cluster_id(c2.detach()))})
+                                this_align_info['rmi'] = sim.rmi(clu_c1, clu_c2),  # Reduced Mutual Information from clusim package
+                                this_align_info['vi'] = sim.vi(clu_c1, clu_c2),  # Variation in Information from clusim (lower=more similar)
+                                this_align_info['rmi_norm'] = sim.rmi(clu_c1, clu_c2, 'normalized'),  # Reduced Mutual Information from clusim package
+                                this_align_info['vi_norm'] = sim.vi(clu_c1, clu_c2, 'entropy'),  # Variation in Information from clusim (lower=more similar)
+                                this_align_info['element_sim'] = sim.element_sim(clu_c1, clu_c2),  # Element-centric similarity from clusim
+                            if 'transfer_AaPb' not in this_align_info:
+                                this_align_info['transfer_AaPb'] = girvan_newman(info_a['adj'], info_b['clusters'])
+                                this_align_info['transfer_AbPa'] = girvan_newman(info_b['adj'], info_a['clusters'])
+                            this_align_info['version'] = __ALIGN_VERSION
         info['align'] = alignment_info
 
     torch.save(info, checkpoint_file)
@@ -281,14 +260,11 @@ if __name__ == '__main__':
     parser.add_argument('--skip-modularity', action='store_true', default=False)
     parser.add_argument('--modularity-metrics', default='')
     parser.add_argument('--modularity-combined', action='store_true')
-    parser.add_argument('--modularity-sparseness', default='')
     parser.add_argument('--skip-alignment', action='store_true', default=False)
     args = parser.parse_args()
 
     eval_metrics = args.metrics.split(",") if args.metrics != '' else None
     mod_metrics = args.modularity_metrics.split(",") if args.modularity_metrics != '' else None
-    # Sparseness is either a list of floats, parsed from comma-separated inputs, or None
-    sparseness = [float(s) for s in args.modularity_sparseness.split(",")] if args.modularity_sparseness != '' else None
 
     # pprint(eval_metrics)
     # pprint(mod_metrics)
@@ -302,7 +278,6 @@ if __name__ == '__main__':
                         metrics=mod_metrics,
                         device=args.device,
                         target_entropy=args.target_entropy,
-                        sparseness=sparseness,
                         combined=args.modularity_combined,
                         align=not args.skip_alignment)
 
