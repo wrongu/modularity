@@ -142,6 +142,8 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
                 warn(f"First sanity check on association method {combo_key} failed!")
 
     info['assoc'] = assoc_info
+    # Save checkpoint after computing associations
+    torch.save(info, checkpoint_file)
 
     suffixes = ['', '_combined'] if combined else ['']
     # For each requested method, compute and store (1) cluster assignments and (2) modularity score
@@ -198,6 +200,8 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
             else:
                 print(f"Skipping modules.{key} -- already done!")
     info['modules'] = module_info
+    # Save checkpoint after computing modules
+    torch.save(info, checkpoint_file)
 
     # Compute module alignments
     if align:
@@ -241,8 +245,8 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
                                 this_align_info['transfer_AbPa'] = girvan_newman(info_b['adj'], info_a['clusters'])
                             this_align_info['version'] = __ALIGN_VERSION
         info['align'] = alignment_info
-
-    torch.save(info, checkpoint_file)
+        # Final save after computing alignment stats
+        torch.save(info, checkpoint_file)
     return info
 
 
