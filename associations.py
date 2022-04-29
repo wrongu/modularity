@@ -116,11 +116,15 @@ class BatchWiseSimilarity(object):
             self.d, h, w = hidden_size
             self.extra_dims = w*h
             self.reduced_extra_dims = min(max_extra_dims, w*h)
-            self.subs_x = torch.randperm(w*h)[:self.reduced_extra_dims]
+            self.subs_x = torch.randperm(self.extra_dims)[:self.reduced_extra_dims]
             self.subs_x = torch.sort(self.subs_x).values
             self.conv = True
         else:
             raise ValueError(f"Not sure how to handle hidden layer size {hidden_size}")
+
+    def _resample_subs(self):
+        self.subs_x = torch.randperm(self.extra_dims)[:self.reduced_extra_dims]
+        self.subs_x = torch.sort(self.subs_x).values
 
     def batch_update(self, h: torch.Tensor, **kwargs) -> None:
         """Update running calculation of dxd unit associations given a bxd batch of hidden activity
@@ -152,6 +156,7 @@ class Covariance(BatchWiseSimilarity):
         batch_hidden = batch_hidden.detach().view(b, self.d, self.extra_dims)[:, :, self.subs_x]
         self.moment1 += batch_hidden.sum(dim=0)
         self.moment2 += torch.einsum('iax,ibx->abx', batch_hidden, batch_hidden)
+        self._resample_subs()
 
     def finalize(self):
         norm_moment1 = self.moment1 / self.n
@@ -176,6 +181,7 @@ class UpstreamSensitivity(BatchWiseSimilarity):
         for i in range(self.reduced_extra_dims):
             jac_i = batch_jacobian(inpt, batch_hidden[:, :, i]).detach()
             self.inner_prod[:, :, i] += torch.einsum('...i,...j->ij', jac_i, jac_i)
+        self._resample_subs()
 
     def finalize(self):
         sim = self.inner_prod.mean(dim=-1) / self.n
@@ -196,6 +202,7 @@ class DownstreamSensitivity(BatchWiseSimilarity):
         jac_all = batch_jacobian(batch_hidden, outpt).detach()
         jac_all = jac_all.view(b, self.d, self.extra_dims, out_dims)
         self.inner_prod += torch.einsum('bixo,bjxo->ijx', jac_all, jac_all)
+        self._resample_subs()
 
     def finalize(self):
         sim = self.inner_prod.mean(dim=-1) / self.n
@@ -215,6 +222,7 @@ class LossHessian(BatchWiseSimilarity):
             self.hess = self.hess + sum_hessian(loss, [batch_hidden]).unsqueeze(-1).detach()
         else:
             self.hess = self.hess + sum_hessian_conv(loss, batch_hidden).detach()
+        self._resample_subs()
 
     def finalize(self):
         # enforce symmetry here in case of numerical imprecision
