@@ -16,6 +16,7 @@ def corrcov(covariance, eps=1e-12):
     return covariance / (sigma.view(-1, 1) * sigma.view(1, -1))
 
 
+@torch.jit.script
 def sum_hessian(loss: torch.Tensor, hidden_layers: List[torch.Tensor]) -> torch.Tensor:
     """Given scalar tensor 'loss' and list of [(b,d1), (b,d2), ...] batch of hidden activations, computes (sum(d), sum(d))
      size sum of hessians, summed over the batch dimension
@@ -26,9 +27,11 @@ def sum_hessian(loss: torch.Tensor, hidden_layers: List[torch.Tensor]) -> torch.
     dims = [h.size(1) for h in hidden_layers]
     hessian = hidden_layers[0].new_zeros(sum(dims), sum(dims))
     row_offset = 0
+    grad_h = torch.autograd.grad([loss], hidden_layers, create_graph=True)
     for i, h_i in enumerate(hidden_layers):
-        grad_i = torch.autograd.grad(loss, h_i, retain_graph=True, create_graph=True)[0]
-        sum_grad = torch.sum(grad_i, dim=0)
+        grad_h_i = grad_h[i]
+        assert grad_h_i is not None
+        sum_grad = torch.sum(grad_h_i, dim=0)
         col_offset = 0
         for j, h_j in enumerate(hidden_layers):
             if j < i:
@@ -37,13 +40,15 @@ def sum_hessian(loss: torch.Tensor, hidden_layers: List[torch.Tensor]) -> torch.
                     hessian[col_offset:col_offset+dims[j], row_offset:row_offset+dims[i]].T
             else:
                 for k in range(dims[i]):
-                    hessian[row_offset+k, col_offset:col_offset+dims[j]] = \
-                        torch.autograd.grad(sum_grad[k], h_j, retain_graph=True)[0].sum(dim=0)
+                    hess_ijk = torch.autograd.grad([sum_grad[k]], [h_j], retain_graph=True)[0]
+                    assert hess_ijk is not None
+                    hessian[row_offset+k, col_offset:col_offset+dims[j]] = hess_ijk.sum(dim=0)
             col_offset += dims[j]
         row_offset += dims[i]
     return hessian
 
 
+@torch.jit.script
 def sum_hessian_conv(loss: torch.Tensor, conv_feature_planes: torch.Tensor, n_subsample: Optional[int] = None) -> torch.Tensor:
     """Given scalar tensor 'loss' and (b,c,h,w) batch of feature planes, computes (c,c,h*w)-size
      sum of hessians, summed over the batch dimension, separately for each x,y location.
@@ -53,23 +58,27 @@ def sum_hessian_conv(loss: torch.Tensor, conv_feature_planes: torch.Tensor, n_su
     """
     b, c, h, w = conv_feature_planes.size()
     hessian = conv_feature_planes.new_zeros(c, c)
-    grad = torch.autograd.grad(loss, conv_feature_planes, retain_graph=True, create_graph=True)[0]
+    grad = torch.autograd.grad([loss], [conv_feature_planes], create_graph=True)[0]
+    assert grad is not None
     sum_grad = torch.sum(grad, dim=0)
-    all_xy = list(itertools.product(range(w), range(h)))
+    # Short version: all_xy = [(x, y) for x in range(w) for y in range(h)] but this kind of double-iterator is not supported by
+    all_yx = [divmod(i, w) for i in range(h*w)]
     if n_subsample is not None:
         assert n_subsample >= 1, "If n_subsample is not None, it must be an integer greater than or equal to 1"
-        subs = torch.randperm(len(all_xy))[:n_subsample]
-        all_xy = [all_xy[i] for i in subs]
+        subs = torch.randperm(len(all_yx))[:n_subsample]
+        all_yx = [all_yx[i] for i in subs]
     for i in range(c):
         # NOTE: this is inefficient because it computes the hessian w.r.t. all x,y,x',y' pairs of location, only for us
         # to subselect later where x==x' and y==y'. Alas, torch doesn't let us take the grad w.r.t. a subset of
         # features, since slice operations break dependency graph.
-        for x, y in tqdm(all_xy, desc=f'xy[{i}]', leave=False):
-            hess_ixy = torch.autograd.grad(sum_grad[i, y, x], conv_feature_planes, retain_graph=True)[0]
+        for y, x in all_yx:
+            hess_ixy = torch.autograd.grad([sum_grad[i, y, x]], [conv_feature_planes], retain_graph=True)[0]
+            assert hess_ixy is not None
             hessian[i, :] = hessian[i, :] + hess_ixy[:, :, y, x].sum(dim=0)
     return hessian
 
 
+@torch.jit.script
 def batch_jacobian(h1: torch.Tensor, h2: torch.Tensor, preserve_shape:bool = False) -> torch.Tensor:
     """Get batch-wise jacobians of h2 with respect to h1. Both must have size (b, ?), and output will be of size
     (b, |h1|, |h2|)
@@ -85,7 +94,8 @@ def batch_jacobian(h1: torch.Tensor, h2: torch.Tensor, preserve_shape:bool = Fal
     h2_flat = h2.reshape(b, n2)
     jacobians = h1.new_zeros(b, n1, n2)
     for i in range(n2):
-        jac_part = torch.autograd.grad(h2_flat[:, i].sum(), h1, retain_graph=True)[0]
+        jac_part = torch.autograd.grad([h2_flat[:, i].sum()], [h1], retain_graph=True)[0]
+        assert jac_part is not None
         jacobians[:, :, i] = jac_part.reshape(b, n1)
     if preserve_shape:
         jacobians = jacobians.reshape((b,) + sz1[1:] + sz2[1:])
