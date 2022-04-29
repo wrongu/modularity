@@ -2,7 +2,7 @@ import torch
 from torch.utils.data import DataLoader
 from math import ceil
 from tqdm import tqdm
-from typing import List
+from typing import List, Union
 import itertools
 
 
@@ -179,9 +179,10 @@ class DownstreamSensitivity(BatchWiseSimilarity):
     def batch_update(self, batch_hidden, *, outpt=None, **kwargs):
         b = batch_hidden.size()[0]
         self.n += b
+        out_dims = outpt.numel() // b
         # Get jacobian of hidden activity w.r.t. changes in the input, then take inner product over input dims
         jac_all = batch_jacobian(batch_hidden, outpt).detach()
-        jac_all = jac_all.view(b, self.d, self.extra_dims, outpt.numel())
+        jac_all = jac_all.view(b, self.d, self.extra_dims, out_dims)
         self.inner_prod += torch.einsum('bixo,bjxo->ijx', jac_all, jac_all)
 
     def finalize(self):

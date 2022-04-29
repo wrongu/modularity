@@ -204,7 +204,7 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
         alignment_info = info.get('align', {})
         for i in range(len(metrics)):
             for j in range(i, len(metrics)):
-                for suffix in ['', '_combined']:
+                for suffix in suffixes:
                     meth1, meth2 = metrics[i] + suffix, metrics[j] + suffix
                     # Sort methods so key is always in alphabetical order <method a>:<method b>
                     meth_a, meth_b = min([meth1, meth2]), max([meth1, meth2])
