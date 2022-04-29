@@ -50,9 +50,9 @@ class LitWrapper(pl.LightningModule):
         hidden, _ = self.model(dummy_input.unsqueeze(0))
         self.hidden_dims = [h.size()[1:] for h in hidden]
 
-    def on_load_checkpoint(self, ckpt_file):
+    def on_load_checkpoint(self, ckpt_data):
         # Instantiate self.model, but let the calling function handle state_dict stuff
-        self.init_model(set_seed=False)
+        self.init_model(set_seed=False, **ckpt_data['hyper_parameters'].get('model_args', {}))
 
     def forward(self, x):
         return self.model(x)
