@@ -1,8 +1,8 @@
 import torch
 from torch.utils.data import DataLoader
-from math import ceil
+from math import ceil, prod
 from tqdm import tqdm
-from typing import List, Union
+from typing import List, Optional
 import itertools
 
 
@@ -16,7 +16,7 @@ def corrcov(covariance, eps=1e-12):
     return covariance / (sigma.view(-1, 1) * sigma.view(1, -1))
 
 
-def sum_hessian(loss, hidden_layers: List[torch.Tensor]):
+def sum_hessian(loss: torch.Tensor, hidden_layers: List[torch.Tensor]) -> torch.Tensor:
     """Given scalar tensor 'loss' and list of [(b,d1), (b,d2), ...] batch of hidden activations, computes (sum(d), sum(d))
      size sum of hessians, summed over the batch dimension
 
@@ -44,7 +44,7 @@ def sum_hessian(loss, hidden_layers: List[torch.Tensor]):
     return hessian
 
 
-def sum_hessian_conv(loss, conv_feature_planes: torch.Tensor, n_subsample: Union[int, None] = None):
+def sum_hessian_conv(loss: torch.Tensor, conv_feature_planes: torch.Tensor, n_subsample: Optional[int] = None) -> torch.Tensor:
     """Given scalar tensor 'loss' and (b,c,h,w) batch of feature planes, computes (c,c,h*w)-size
      sum of hessians, summed over the batch dimension, separately for each x,y location.
 
@@ -70,7 +70,7 @@ def sum_hessian_conv(loss, conv_feature_planes: torch.Tensor, n_subsample: Union
     return hessian
 
 
-def batch_jacobian(h1, h2):
+def batch_jacobian(h1: torch.Tensor, h2: torch.Tensor, preserve_shape:bool = False) -> torch.Tensor:
     """Get batch-wise jacobians of h2 with respect to h1. Both must have size (b, ?), and output will be of size
     (b, |h1|, |h2|)
 
@@ -87,7 +87,9 @@ def batch_jacobian(h1, h2):
     for i in range(n2):
         jac_part = torch.autograd.grad(h2_flat[:, i].sum(), h1, retain_graph=True)[0]
         jacobians[:, :, i] = jac_part.reshape(b, n1)
-    return jacobians.reshape((b,) + sz1[1:] + sz2[1:])
+    if preserve_shape:
+        jacobians = jacobians.reshape((b,) + sz1[1:] + sz2[1:])
+    return jacobians
 
 
 class BatchWiseSimilarity(object):
@@ -244,9 +246,13 @@ def get_similarity_combined(model, method, dataset, device='cpu', batch_size=200
     model.eval()
     model.to(device)
 
+    for h in model.hidden_dims:
+        if isinstance(h, tuple) and len(h) > 1:
+            raise ValueError("get_similarity_combined can only handle 1-dimensional hidden layers (e.g. Linear rather than Conv2d)")
+
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, pin_memory=True)
     num_batches = ceil(len(dataset)/batch_size)
-    total_d = sum(model.hidden_dims)
+    total_d = sum(map(prod, model.hidden_dims))
 
     if method in ['forward_cov', 'forward_cov_norm']:
         moment1 = torch.zeros(total_d, device=device)
