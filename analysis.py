@@ -89,6 +89,8 @@ def gather_metrics(ckpt_file: Path, metrics: Iterable[str]) -> Iterable[dict]:
                     return val.item()
                 else:
                     return val.numpy()
+            elif isinstance(val, tuple) and len(val) == 1:
+                return val[0]
             else:
                 return val
         _data = {k: cast_type(v) for k, v in _data.items()}
