@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 from models import LitWrapper
-from associations import get_similarity_by_layer, get_similarity_combined
+from associations import get_similarity_by_layer, get_similarity_combined, corrcov
 from associations import METHODS as association_methods
 from modularity import monte_carlo_modularity, girvan_newman, soft_num_clusters, is_valid_adjacency_matrix, \
     alignment_score, shuffled_alignment_score, cluster_id

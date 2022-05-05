@@ -3,7 +3,6 @@ from torch.utils.data import DataLoader
 from math import ceil, prod
 from tqdm import tqdm
 from typing import List, Optional
-import itertools
 
 
 METHODS = ['forward_cov', 'forward_jac', 'backward_jac', 'backward_hess']
@@ -144,7 +143,7 @@ class BatchWiseSimilarity(object):
 
 class Covariance(BatchWiseSimilarity):
     def __init__(self, hidden_size, norm, **kwargs):
-        super().__init__(hidden_size, norm)
+        super().__init__(hidden_size, norm, max_extra_dims=kwargs.pop('max_extra_dims', 32))
         # Note: if hidden_size is (c,h,w) of a conv layer, then extra_dims=h*w and we compute covariance across channels
         # separately for each location.
         self.moment1 = torch.zeros(self.d, self.reduced_extra_dims, **kwargs)
@@ -169,7 +168,7 @@ class Covariance(BatchWiseSimilarity):
 
 class UpstreamSensitivity(BatchWiseSimilarity):
     def __init__(self, hidden_size, norm, **kwargs):
-        super().__init__(hidden_size, norm)
+        super().__init__(hidden_size, norm, max_extra_dims=kwargs.pop('max_extra_dims', 32))
         self.n = 0
         self.inner_prod = torch.zeros(self.d, self.d, self.reduced_extra_dims, **kwargs)
 
@@ -180,7 +179,7 @@ class UpstreamSensitivity(BatchWiseSimilarity):
         batch_hidden = batch_hidden.view(b, self.d, self.extra_dims)[:, :, self.subs_x]
         for i in range(self.reduced_extra_dims):
             jac_i = batch_jacobian(inpt, batch_hidden[:, :, i]).detach()
-            self.inner_prod[:, :, i] += torch.einsum('...i,...j->ij', jac_i, jac_i)
+            self.inner_prod[:, :, i] += torch.einsum('...i,...j->ij', jac_i, jac_i) / self.reduced_extra_dims
         self._resample_subs()
 
     def finalize(self):
@@ -190,7 +189,7 @@ class UpstreamSensitivity(BatchWiseSimilarity):
 
 class DownstreamSensitivity(BatchWiseSimilarity):
     def __init__(self, hidden_size, norm, **kwargs):
-        super().__init__(hidden_size, norm)
+        super().__init__(hidden_size, norm, max_extra_dims=kwargs.pop('max_extra_dims', 32))
         self.n = 0
         self.inner_prod = torch.zeros(self.d, self.d, self.extra_dims, **kwargs)
 
@@ -200,8 +199,10 @@ class DownstreamSensitivity(BatchWiseSimilarity):
         out_dims = outpt.numel() // b
         # Get jacobian of hidden activity w.r.t. changes in the input, then take inner product over input dims
         jac_all = batch_jacobian(batch_hidden, outpt).detach()
+        # jac_all = jac_all.view(b, self.d, self.extra_dims, out_dims)[:,:,self.subs_x,:]
+        # self.inner_prod += torch.einsum('bixo,bjxo->ijx', jac_all, jac_all) / self.reduced_extra_dims
         jac_all = jac_all.view(b, self.d, self.extra_dims, out_dims)
-        self.inner_prod += torch.einsum('bixo,bjxo->ijx', jac_all, jac_all)
+        self.inner_prod += torch.einsum('bixo,bjxo->ijx', jac_all, jac_all) / self.extra_dims
         self._resample_subs()
 
     def finalize(self):
@@ -211,7 +212,7 @@ class DownstreamSensitivity(BatchWiseSimilarity):
 
 class LossHessian(BatchWiseSimilarity):
     def __init__(self, hidden_size, norm, **kwargs):
-        super().__init__(hidden_size, norm)
+        super().__init__(hidden_size, norm, max_extra_dims=kwargs.pop('max_extra_dims', 32))
         self.n = 0
         self.hess = torch.zeros(self.d, self.d, self.extra_dims, **kwargs)
 
@@ -230,8 +231,7 @@ class LossHessian(BatchWiseSimilarity):
         return torch.abs(corrcov(sym_hess) if self.norm else sym_hess)
 
 
-
-def get_similarity_by_layer(model, method, dataset, device='cpu', batch_size=200, shuffle=True):
+def get_similarity_by_layer(model, method, dataset, device='cpu', batch_size=200, shuffle=True, max_extra_dims=32):
     model.eval()
     model.to(device)
     norm = method.endswith('_norm')
@@ -239,22 +239,22 @@ def get_similarity_by_layer(model, method, dataset, device='cpu', batch_size=200
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, pin_memory=True)
 
     if method in ['forward_cov', 'forward_cov_norm']:
-        sim_per_layer = [Covariance(sz, norm, device=device) for sz in model.hidden_dims]
+        sim_per_layer = [Covariance(sz, norm, device=device, max_extra_dims=max_extra_dims) for sz in model.hidden_dims]
     elif method in ['backward_hess', 'backward_hess_norm']:
-        sim_per_layer = [LossHessian(sz, norm, device=device) for sz in model.hidden_dims]
+        sim_per_layer = [LossHessian(sz, norm, device=device, max_extra_dims=max_extra_dims) for sz in model.hidden_dims]
     elif method in ['forward_jac', 'forward_jac_norm']:
-        sim_per_layer = [UpstreamSensitivity(sz, norm, device=device) for sz in model.hidden_dims]
+        sim_per_layer = [UpstreamSensitivity(sz, norm, device=device, max_extra_dims=max_extra_dims) for sz in model.hidden_dims]
     elif method in ['backward_jac', 'backward_jac_norm']:
-        sim_per_layer = [DownstreamSensitivity(sz, norm, device=device) for sz in model.hidden_dims]
+        sim_per_layer = [DownstreamSensitivity(sz, norm, device=device, max_extra_dims=max_extra_dims) for sz in model.hidden_dims]
     else:
-        raise ValueError(f"get_similarity_combined requires method to be one of {METHODS}")
+        raise ValueError(f"get_similarity_by_layer requires method to be one of {METHODS}")
 
-    for im, la in tqdm(loader, total=len(loader), desc=method, leave=False):
+    for im, la in tqdm(loader, total=len(loader), desc=method, leave=False, position=1):
         im.requires_grad_(True)
         im, la = im.to(device), la.to(device)
         hidden, out = model(im)
         kwargs = {'inpt': im, 'outpt': out, 'loss': model.loss_fn(im, la, out)}
-        for h, sim in zip(hidden, sim_per_layer):
+        for h, sim in tqdm(zip(hidden, sim_per_layer), desc='Layers', leave=False, total=len(hidden), position=2):
             sim.batch_update(h, **kwargs)
 
     return [sim.finalize().detach().cpu() for sim in sim_per_layer]
@@ -313,9 +313,7 @@ def get_similarity_combined(model, method, dataset, device='cpu', batch_size=200
             jac = torch.cat([batch_jacobian(h, out) for h in hidden], dim=1)
             assoc += torch.einsum('bxi,byi->xy', jac, jac) / len(dataset)
     else:
-        allowed_methods = ['forward_cov', 'forward_cov_norm', 'backward_hess', 'backward_hess_norm',
-                           'forward_jac', 'forward_jac_norm', 'backward_jac', 'backward_jac_norm']
-        raise ValueError(f"get_similarity_combined requires method to be one of {allowed_methods}")
+        raise ValueError(f"get_similarity_by_layer requires method to be one of {METHODS}")
 
     if 'norm' in method:
         assoc = corrcov(assoc)
