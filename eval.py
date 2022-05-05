@@ -15,7 +15,7 @@ from functools import lru_cache
 
 
 __MOD_VERSION = 3
-__ALIGN_VERSION = 7
+__ALIGN_VERSION = 8
 
 
 def loss(mdl, dataset, task, device='cpu'):
@@ -123,12 +123,23 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
     # Precompute 'association' matrices and store in 'assoc' dictionary of checkpoint data
     assoc_info = info.get('assoc', {})
     for meth in metrics:
+        # Attempt shortcut: create _norm version by calling corrcov on version without norm... no need to go recompute things
+        if meth.endswith('_norm') and meth not in assoc_info:
+            unnorm_meth = meth.split('_norm')[0]
+            if unnorm_meth in assoc_info:
+                assoc_info[meth] = [corrcov(m) for m in assoc_info[unnorm_meth]]
+
         # Compute similarity/association per layer using each requested method. Each of assoc_info[meth] will be a list
         # of similarity matrices, one per layer
         if meth not in assoc_info:
             # compute layer-wise association info
             model, _, _, data_test = load_model_once(checkpoint_file, data_dir, device)
-            assoc_info[meth] = get_similarity_by_layer(model, meth, data_test, device=device, batch_size=100)
+            try:
+                assoc_info[meth] = get_similarity_by_layer(model, meth, data_test, device=device, batch_size=100)
+            except RuntimeError:
+                # For convolutional models we sometimes run out of CUDA memory with intermediate vars.. in that case
+                # fall back on reduced batch size and pray.
+                assoc_info[meth] = get_similarity_by_layer(model, meth, data_test, device=device, batch_size=10)
             if not all(is_valid_adjacency_matrix(m, enforce_sym=True) for m in assoc_info[meth]):
                 warn(f"First sanity check on association method {meth} failed!")
 
@@ -240,9 +251,11 @@ def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=500
                                 this_align_info['rmi_norm'] = sim.rmi(clu_c1, clu_c2, 'normalized'),  # Reduced Mutual Information from clusim package
                                 this_align_info['vi_norm'] = sim.vi(clu_c1, clu_c2, 'entropy'),  # Variation in Information from clusim (lower=more similar)
                                 this_align_info['element_sim'] = sim.element_sim(clu_c1, clu_c2),  # Element-centric similarity from clusim
-                            if 'transfer_AaPb' not in this_align_info:
-                                this_align_info['transfer_AaPb'] = girvan_newman(info_a['adj'], info_b['clusters']) / info_a['score']
-                                this_align_info['transfer_AbPa'] = girvan_newman(info_b['adj'], info_a['clusters']) / info_b['score']
+                            if 'transfer_AaPb_norm' not in this_align_info:
+                                this_align_info['transfer_AaPb'] = girvan_newman(info_a['adj'], info_b['clusters'])
+                                this_align_info['transfer_AaPb_norm'] = girvan_newman(info_a['adj'], info_b['clusters']) / info_a['score']
+                                this_align_info['transfer_AbPa'] = girvan_newman(info_b['adj'], info_a['clusters'])
+                                this_align_info['transfer_AbPa_norm'] = girvan_newman(info_b['adj'], info_a['clusters']) / info_b['score']
                             this_align_info['version'] = __ALIGN_VERSION
         info['align'] = alignment_info
         # Final save after computing alignment stats
