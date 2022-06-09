@@ -57,7 +57,7 @@ def load_model_once(checkpoint_file, data_dir, device):
 
 
 def evaluate(checkpoint_file, data_dir, metrics=None, device='cpu'):
-    info = torch.load(checkpoint_file)
+    info = torch.load(checkpoint_file, map_location=device)
 
     if metrics is None:
         metrics = ['train_loss',
@@ -110,7 +110,7 @@ def evaluate(checkpoint_file, data_dir, metrics=None, device='cpu'):
 
 
 def eval_modularity(checkpoint_file, data_dir, target_entropy=None, mc_steps=5000, metrics=None, align=True, combined=False, device='cpu'):
-    info = torch.load(checkpoint_file)
+    info = torch.load(checkpoint_file, map_location=device)
 
     # Use defaults unless target_entropy is given
     mc_kwargs = {'device': device}
@@ -298,5 +298,5 @@ if __name__ == '__main__':
                         align=not args.skip_alignment)
 
     if eval_metrics is not None:
-        info = torch.load(args.ckpt_file)
+        info = torch.load(args.ckpt_file, map_location=args.device)
         pprint({k: info[k] for k in eval_metrics if k in info})
