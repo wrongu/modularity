@@ -2,3 +2,7 @@
 __pycache__
 .idea
 figures/
+nmc4/
+paper/
+progress-report/
+*.ipynb_checkpoints/
